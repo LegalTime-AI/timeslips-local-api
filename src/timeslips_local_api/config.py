@@ -86,14 +86,14 @@ def load_settings() -> Settings:
     return Settings()
 
 
-def _upsert_env_token(path: Path, token: str) -> None:
+def _upsert_env_token(path: Path, token: str, overwrite: bool = False) -> None:
     lines = path.read_text(encoding="utf-8").splitlines() if path.is_file() else []
     rewritten = False
     out: list[str] = []
     for line in lines:
         if line.startswith("TIMESLIPS_TOKEN="):
             current = line.split("=", 1)[1].strip()
-            if current:
+            if current and not overwrite:
                 return
             out.append(f"TIMESLIPS_TOKEN={token}")
             rewritten = True
@@ -112,3 +112,13 @@ def persist_token_if_missing(token: str) -> None:
     sidecar = sidecar_env_file()
     if sidecar != appdata_env_file():
         _upsert_env_token(sidecar, token)
+
+
+def persist_running_token(token: str) -> None:
+    """Write the live helper token so LegalTime can call /v1/clients."""
+    if not token:
+        return
+    _upsert_env_token(appdata_env_file(), token, overwrite=True)
+    sidecar = sidecar_env_file()
+    if sidecar != appdata_env_file():
+        _upsert_env_token(sidecar, token, overwrite=True)

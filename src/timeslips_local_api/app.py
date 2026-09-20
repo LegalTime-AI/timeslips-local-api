@@ -56,7 +56,7 @@ def status(_: None = Depends(require_token), store: FirebirdStore = Depends(get_
 @app.get("/v1/timekeepers")
 def timekeepers(
     q: str | None = None,
-    limit: int = 100,
+    limit: int = 500,
     _: None = Depends(require_token),
     store: FirebirdStore = Depends(get_store),
 ) -> dict:
@@ -66,7 +66,7 @@ def timekeepers(
 @app.get("/v1/clients")
 def clients(
     q: str | None = None,
-    limit: int = 100,
+    limit: int = 500,
     _: None = Depends(require_token),
     store: FirebirdStore = Depends(get_store),
 ) -> dict:
@@ -76,7 +76,7 @@ def clients(
 @app.get("/v1/activities")
 def activities(
     q: str | None = None,
-    limit: int = 100,
+    limit: int = 500,
     _: None = Depends(require_token),
     store: FirebirdStore = Depends(get_store),
 ) -> dict:
@@ -89,7 +89,7 @@ def list_slips(
     clientNickname: str | None = Query(default=None),
     timekeeperNickname: str | None = Query(default=None),
     billed: bool | None = None,
-    limit: int = 100,
+    limit: int = 500,
     _: None = Depends(require_token),
     store: FirebirdStore = Depends(get_store),
 ) -> dict:
