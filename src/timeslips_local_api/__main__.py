@@ -13,7 +13,7 @@ import urllib.request
 import uvicorn
 
 from .app import app, get_settings
-from .config import load_settings, persist_token_if_missing
+from .config import load_settings, persist_running_token
 from .health import database_watch
 from .runtime import acquire_single_instance, configure_file_logging, enable_autostart_once
 from .tray import run_tray, show_error
@@ -77,12 +77,12 @@ def main() -> None:
     if not settings.token:
         token = secrets.token_hex(24)
         os.environ["TIMESLIPS_TOKEN"] = token
-        persist_token_if_missing(token)
+        persist_running_token(token)
         get_settings.cache_clear()
         settings = load_settings()
         logging.info("generated helper token")
     else:
-        persist_token_if_missing(settings.token)
+        persist_running_token(settings.token)
     logging.info(
         "listening on %s:%s write_backend=%s production_blocked=%s",
         settings.bind,

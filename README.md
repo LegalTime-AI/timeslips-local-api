@@ -17,7 +17,7 @@ LegalTime AI consumes this helper through a thin desktop adapter. The helper nev
 
 ## Install
 
-Download **TimeslipsHelper.exe** from [Releases](https://github.com/LegalTime-AI/timeslips-local-api/releases/latest). Run it on the Windows computer that has Timeslips Premium. It is a windowed tray app: no terminal, one instance, auto-start at logon, and it keeps serving if Firebird is briefly down. Copy `pack/timeslips-helper.env.example` next to the exe as `timeslips-helper.env` and set `TIMESLIPS_FDB` to a **copy** of `MAIN.FDB`. The helper writes its token to `%LOCALAPPDATA%\TimeslipsHelper\timeslips-helper.env` so LegalTime can find it. Quit from the tray menu.
+Download **TimeslipsHelper.exe** from [Releases](https://github.com/LegalTime-AI/timeslips-local-api/releases/latest). Run it on the Windows computer that has Timeslips Premium. It is a windowed tray app: no terminal, one instance, auto-start at logon, and it keeps serving if Firebird is briefly down. Copy `pack/timeslips-helper.env.example` next to the exe as `timeslips-helper.env` and set `TIMESLIPS_FDB` to a **copy** of `MAIN.FDB`. On start it writes the token it is actually using to `%LOCALAPPDATA%\TimeslipsHelper\timeslips-helper.env` so LegalTime can call `/v1/clients` and `/v1/activities`. Quit from the tray menu.
 
 The helper still needs Timeslips Premium’s Firebird server (`FirebirdServerSageTimeslips`).
 
@@ -50,9 +50,9 @@ Timekeeping only. Bills, AR, trust, LEDES, expenses, and invoices are reserved (
 | Method | Path | Notes |
 |---|---|---|
 | GET | `/v1/status` | connection, write backend, capabilities |
-| GET | `/v1/timekeepers` | timekeeper nicknames |
-| GET | `/v1/clients` | client nicknames (Timeslips matters) |
-| GET | `/v1/activities` | time activities only |
+| GET | `/v1/timekeepers` | timekeeper nicknames (`limit` default 500, cap 500) |
+| GET | `/v1/clients` | open client nicknames (Timeslips matters; inactive excluded; `limit` default 500) |
+| GET | `/v1/activities` | open time activities (inactive excluded; `limit` default 500) |
 | GET | `/v1/slips` | filter by date / nicknames / billed |
 | GET | `/v1/slips/{id}` | |
 | POST | `/v1/slips` | create unbilled time slip (`Idempotency-Key` or `externalId`) |

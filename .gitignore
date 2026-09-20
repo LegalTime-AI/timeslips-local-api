@@ -9,5 +9,6 @@ build/
 .env
 .python-version
 .pytest_cache/
+timeslips-helper.env
 docs/gui-check/*.png
 docs/gui-check/*.jpg

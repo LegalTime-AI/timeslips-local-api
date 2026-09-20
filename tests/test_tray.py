@@ -1,4 +1,4 @@
-from timeslips_local_api.config import Settings, persist_token_if_missing
+from timeslips_local_api.config import Settings, persist_running_token, persist_token_if_missing
 from timeslips_local_api.health import classify_database_failure, health_payload, probe_database
 
 
@@ -24,6 +24,20 @@ def test_persist_token_if_missing_keeps_existing(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(cfg, "sidecar_env_file", lambda: env)
     persist_token_if_missing("replacement")
     assert env.read_text(encoding="utf-8") == "TIMESLIPS_TOKEN=keep-me\n"
+
+
+def test_persist_running_token_overwrites_stale_file(tmp_path, monkeypatch) -> None:
+    from timeslips_local_api import config as cfg
+
+    env = tmp_path / "timeslips-helper.env"
+    env.write_text("TIMESLIPS_FDB=C:/TimeslipsExplore/MAIN_COPY.FDB\nTIMESLIPS_TOKEN=stale\n", encoding="utf-8")
+    monkeypatch.setattr(cfg, "appdata_env_file", lambda: env)
+    monkeypatch.setattr(cfg, "sidecar_env_file", lambda: env)
+    persist_running_token("live-token")
+    text = env.read_text(encoding="utf-8")
+    assert "TIMESLIPS_TOKEN=live-token" in text
+    assert "TIMESLIPS_TOKEN=stale" not in text
+    assert "SYSDBA" not in text
 
 
 def test_probe_missing_database_file(tmp_path) -> None:
