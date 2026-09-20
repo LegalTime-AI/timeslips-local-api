@@ -17,7 +17,7 @@ LegalTime AI consumes this helper through a thin desktop adapter. The helper nev
 
 ## Install
 
-Download **TimeslipsHelper.exe** from [Releases](https://github.com/LegalTime-AI/timeslips-local-api/releases/latest). Run it on the Windows computer that has Timeslips Premium. Copy `pack/timeslips-helper.env.example` next to the exe as `timeslips-helper.env` and set `TIMESLIPS_FDB` to a **copy** of `MAIN.FDB`.
+Download **TimeslipsHelper.exe** from [Releases](https://github.com/LegalTime-AI/timeslips-local-api/releases/latest). Run it on the Windows computer that has Timeslips Premium. It is a windowed tray app: no terminal, one instance, auto-start at logon, and it keeps serving if Firebird is briefly down. Copy `pack/timeslips-helper.env.example` next to the exe as `timeslips-helper.env` and set `TIMESLIPS_FDB` to a **copy** of `MAIN.FDB`. The helper writes its token to `%LOCALAPPDATA%\TimeslipsHelper\timeslips-helper.env` so LegalTime can find it. Quit from the tray menu.
 
 The helper still needs Timeslips Premium’s Firebird server (`FirebirdServerSageTimeslips`).
 
@@ -34,7 +34,7 @@ $env:TIMESLIPS_PASSWORD = "<Sage-documented Premium SYSDBA password>"
 python -m timeslips_local_api
 ```
 
-Pack a Windows exe: `python -m pip install -e ".[pack]"` then `pyinstaller --noconfirm pack/timeslips-helper.spec`. The file is `dist/TimeslipsHelper.exe`.
+Pack a Windows exe: `python -m pip install -e ".[pack]"` then `pyinstaller --noconfirm pack/timeslips-helper.spec`. The file is `dist/TimeslipsHelper.exe` (windowed, no console). Logs rotate under `%LOCALAPPDATA%\TimeslipsHelper\helper.log`. Copy token from the tray menu. `GET /health` is unauthenticated liveness plus a finite database reason; it never includes paths or Sage credentials.
 
 Listens on `http://127.0.0.1:3051`.
 

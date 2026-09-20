@@ -102,27 +102,18 @@ class FirebirdStore:
             raise ApiError(403, "production Timeslips database writes are blocked")
 
     def status(self) -> Status:
-        connected = False
-        version = None
-        try:
-            con = connect(self.settings)
-            cur = con.cursor()
-            cur.execute("SELECT COUNT(*) FROM SLPTRANS")
-            cur.fetchone()
-            connected = True
-            con.close()
-        except Exception:  # noqa: BLE001
-            connected = False
-        display_db = self.settings.fdb
-        if looks_like_production_fdb(display_db):
-            display_db = "(production path hidden)"
+        from .health import probe_database
+
+        connected, reason = probe_database(self.settings)
+        display_db = "blocked-production" if looks_like_production_fdb(self.settings.fdb) else "(local database)"
         return Status(
             connected=connected,
-            database=display_db if not looks_like_production_fdb(self.settings.fdb) else "blocked-production",
+            database=display_db,
             writeBackend=self.settings.write_backend,
             capabilities=list(CAPABILITIES),
             productionWritesBlocked=self.settings.production_blocked,
-            timeslipsVersion=version,
+            timeslipsVersion=None,
+            databaseReason=reason,
         )
 
     def list_names(self, kind: NameKind, q: str | None = None, limit: int = 100) -> list[NameRecord]:

@@ -5,13 +5,15 @@ from functools import lru_cache
 from fastapi import Depends, FastAPI, Header, Query, Request
 from fastapi.responses import JSONResponse
 
+from . import HELPER_VERSION
 from .config import Settings, load_settings
 from .errors import ApiError
 from .firebird_store import FirebirdStore, RESERVED
+from .health import health_payload
 from .ledger import Ledger
 from .models import SlipCreate, SlipPatch, VerifyRequest
 
-app = FastAPI(title="timeslips-local-api", version="0.1.0")
+app = FastAPI(title="timeslips-local-api", version=HELPER_VERSION)
 
 
 @lru_cache(maxsize=1)
@@ -43,7 +45,7 @@ def require_token(
 
 @app.get("/health")
 def health() -> dict:
-    return {"ok": True, "service": "timeslips-local-api", "version": "1"}
+    return health_payload(get_settings())
 
 
 @app.get("/v1/status")

@@ -72,3 +72,4 @@ class Status(BaseModel):
     capabilities: list[str]
     productionWritesBlocked: bool
     timeslipsVersion: str | None = None
+    databaseReason: str | None = None

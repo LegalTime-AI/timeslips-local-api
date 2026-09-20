@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "timeslips-local-api"
-version = "0.1.0"
+version = "0.2.0"
 description = "Unofficial loopback HTTP API for Sage Timeslips Premium (Firebird)."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -24,7 +24,7 @@ Issues = "https://github.com/LegalTime-AI/timeslips-local-api/issues"
 
 [project.optional-dependencies]
 dev = ["httpx>=0.27", "pytest>=8"]
-pack = ["pyinstaller>=6"]
+pack = ["pyinstaller>=6", "pystray>=0.19", "pillow>=10"]
 
 [project.scripts]
 timeslips-local-api = "timeslips_local_api.__main__:main"

@@ -1,3 +1,6 @@
 """Loopback HTTP API for Sage Timeslips Premium."""
 
-__version__ = "0.1.0"
+# apiVersion is the HTTP contract. Bump only for a breaking v1 change.
+API_VERSION = 1
+HELPER_VERSION = "0.2.0"
+__version__ = HELPER_VERSION

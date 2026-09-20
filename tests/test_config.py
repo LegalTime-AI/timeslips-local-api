@@ -38,16 +38,17 @@ def test_production_writes_guard(tmp_path) -> None:
 
 
 def test_sidecar_env_file_sets_database_path(tmp_path, monkeypatch) -> None:
-    from timeslips_local_api.config import load_settings
+    from timeslips_local_api import config as cfg
 
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("TIMESLIPS_FDB", raising=False)
     monkeypatch.delenv("TIMESLIPS_TOKEN", raising=False)
+    monkeypatch.setattr(cfg, "appdata_env_file", lambda: tmp_path / "missing-appdata.env")
     (tmp_path / "timeslips-helper.env").write_text(
         "TIMESLIPS_FDB=C:/TimeslipsExplore/MAIN_COPY.FDB\nTIMESLIPS_TOKEN=sidecar-token\n",
         encoding="utf-8",
     )
-    settings = load_settings()
+    settings = cfg.load_settings()
     assert settings.fdb.endswith("MAIN_COPY.FDB")
     assert settings.token == "sidecar-token"
     assert "SYSDBA" not in settings.fdb

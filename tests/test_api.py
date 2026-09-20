@@ -26,7 +26,15 @@ AUTH = {"Authorization": "Bearer test-token"}
 def test_health() -> None:
     res = client.get("/health")
     assert res.status_code == 200
-    assert res.json()["ok"] is True
+    body = res.json()
+    assert body["ok"] is True
+    assert body["apiVersion"] == 1
+    assert body["service"] == "timeslips-local-api"
+    dumped = str(body)
+    assert "SYSDBA" not in dumped
+    assert "ts_2O17p" not in dumped
+    assert "MAIN.FDB" not in dumped
+    assert "password" not in dumped.lower()
 
 
 def test_unauthorized() -> None:
