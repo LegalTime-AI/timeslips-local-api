@@ -1,0 +1,13 @@
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+dist/
+build/
+.data/
+*.sqlite
+.env
+.python-version
+.pytest_cache/
+docs/gui-check/*.png
+docs/gui-check/*.jpg
