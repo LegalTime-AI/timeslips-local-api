@@ -5,7 +5,7 @@ from functools import lru_cache
 from fastapi import Depends, FastAPI, Header, Query, Request
 from fastapi.responses import JSONResponse
 
-from .config import Settings
+from .config import Settings, load_settings
 from .errors import ApiError
 from .firebird_store import FirebirdStore, RESERVED
 from .ledger import Ledger
@@ -16,7 +16,7 @@ app = FastAPI(title="timeslips-local-api", version="0.1.0")
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
-    return Settings()
+    return load_settings()
 
 
 def get_store() -> FirebirdStore:

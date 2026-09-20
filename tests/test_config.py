@@ -37,9 +37,23 @@ def test_production_writes_guard(tmp_path) -> None:
     assert "SYSDBA" not in exc.value.message
 
 
-def test_dll_export_snapshot_has_no_create_slip() -> None:
-    from pathlib import Path
+def test_sidecar_env_file_sets_database_path(tmp_path, monkeypatch) -> None:
+    from timeslips_local_api.config import load_settings
 
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("TIMESLIPS_FDB", raising=False)
+    monkeypatch.delenv("TIMESLIPS_TOKEN", raising=False)
+    (tmp_path / "timeslips-helper.env").write_text(
+        "TIMESLIPS_FDB=C:/TimeslipsExplore/MAIN_COPY.FDB\nTIMESLIPS_TOKEN=sidecar-token\n",
+        encoding="utf-8",
+    )
+    settings = load_settings()
+    assert settings.fdb.endswith("MAIN_COPY.FDB")
+    assert settings.token == "sidecar-token"
+    assert "SYSDBA" not in settings.fdb
+
+
+def test_dll_export_snapshot_has_no_create_slip() -> None:
     text = (Path(__file__).resolve().parents[1] / "docs" / "tsdbap32-exports.txt").read_text(encoding="utf-8")
     assert "DB_NewRecord" in text
     assert "DB_SaveRecord" in text

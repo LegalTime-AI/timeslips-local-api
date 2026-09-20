@@ -17,7 +17,11 @@ LegalTime AI consumes this helper through a thin desktop adapter. The helper nev
 
 ## Install
 
-Requires Python 3.11+ and Timeslips Premium’s Firebird server (the `FirebirdServerSageTimeslips` Windows service).
+Download **TimeslipsHelper.exe** from [Releases](https://github.com/LegalTime-AI/timeslips-local-api/releases/latest). Run it on the Windows computer that has Timeslips Premium. Copy `pack/timeslips-helper.env.example` next to the exe as `timeslips-helper.env` and set `TIMESLIPS_FDB` to a **copy** of `MAIN.FDB`.
+
+The helper still needs Timeslips Premium’s Firebird server (`FirebirdServerSageTimeslips`).
+
+Developer install from source:
 
 ```powershell
 git clone https://github.com/LegalTime-AI/timeslips-local-api.git
@@ -29,6 +33,8 @@ $env:TIMESLIPS_FDB = "C:\path\to\MAIN_COPY.FDB"
 $env:TIMESLIPS_PASSWORD = "<Sage-documented Premium SYSDBA password>"
 python -m timeslips_local_api
 ```
+
+Pack a Windows exe: `python -m pip install -e ".[pack]"` then `pyinstaller --noconfirm pack/timeslips-helper.spec`. The file is `dist/TimeslipsHelper.exe`.
 
 Listens on `http://127.0.0.1:3051`.
 
