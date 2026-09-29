@@ -30,6 +30,9 @@ class Settings(BaseSettings):
     password: str = "ts_2O17p"
     bind: str = "127.0.0.1"
     port: int = 3051
+    # Opt-in. Listens on every interface so another laptop on a private network
+    # can call the helper. Public port forwards are out of scope.
+    lan: bool = False
     token: str = ""
     write_backend: str = "sql"
     allow_production: bool = False
@@ -79,6 +82,26 @@ def _env_files() -> tuple[Path, ...]:
     return tuple(files)
 
 
+LOOPBACK_BINDS = frozenset({"127.0.0.1", "localhost", "::1"})
+
+
+def resolve_bind(settings: Settings) -> str:
+    """Return the address uvicorn should bind.
+
+    TIMESLIPS_LAN=1 listens on 0.0.0.0. Any other non-loopback bind is refused,
+    including when LAN mode is on, so a public address cannot be selected by
+    setting TIMESLIPS_BIND alone.
+    """
+    bind = (settings.bind or "").strip()
+    if settings.lan:
+        if bind not in LOOPBACK_BINDS and bind != "0.0.0.0":
+            raise ValueError("TIMESLIPS_BIND must be a loopback address")
+        return "0.0.0.0"
+    if bind not in LOOPBACK_BINDS:
+        raise ValueError("TIMESLIPS_BIND must be a loopback address")
+    return bind
+
+
 def load_settings() -> Settings:
     files = _env_files()
     if files:
@@ -112,6 +135,32 @@ def persist_token_if_missing(token: str) -> None:
     sidecar = sidecar_env_file()
     if sidecar != appdata_env_file():
         _upsert_env_token(sidecar, token)
+
+
+def _upsert_env_value(path: Path, key: str, value: str) -> None:
+    prefix = f"{key}="
+    lines = path.read_text(encoding="utf-8").splitlines() if path.is_file() else []
+    rewritten = False
+    out: list[str] = []
+    for line in lines:
+        if line.startswith(prefix):
+            out.append(f"{prefix}{value}")
+            rewritten = True
+        else:
+            out.append(line)
+    if not rewritten:
+        out.append(f"{prefix}{value}")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(out) + "\n", encoding="utf-8")
+
+
+def persist_lan(enabled: bool) -> None:
+    """Remember whether other computers on this network may connect. Takes effect on the next launch."""
+    value = "1" if enabled else "0"
+    _upsert_env_value(appdata_env_file(), "TIMESLIPS_LAN", value)
+    sidecar = sidecar_env_file()
+    if sidecar != appdata_env_file():
+        _upsert_env_value(sidecar, "TIMESLIPS_LAN", value)
 
 
 def persist_running_token(token: str) -> None:

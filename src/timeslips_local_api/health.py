@@ -5,6 +5,7 @@ from pathlib import Path
 
 from . import API_VERSION, HELPER_VERSION
 from .config import Settings
+from .discovery import machine_host_name
 from .errors import ApiError
 from .firebird import connect
 
@@ -107,6 +108,7 @@ def health_payload(settings: Settings) -> dict:
         "service": "timeslips-local-api",
         "apiVersion": API_VERSION,
         "helperVersion": HELPER_VERSION,
+        "hostName": machine_host_name(),
         "database": {
             "reachable": reachable,
             "reason": reason,

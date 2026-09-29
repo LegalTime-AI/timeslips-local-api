@@ -2,7 +2,7 @@
 
 `timeslips-local-api` is an unofficial local helper. Treat it as a privileged process on the Timeslips workstation.
 
-- Bind only to loopback. The process refuses non-loopback `TIMESLIPS_BIND`.
+- Bind to loopback unless `TIMESLIPS_LAN=1`. That mode listens on `0.0.0.0` for another computer on a private network. The process still refuses any other `TIMESLIPS_BIND`. Do not publish port 3051 on a router. The UDP discovery beacon on port 3052 carries the computer name, port, and helper version only.
 - Require `TIMESLIPS_TOKEN` for every `/v1` route. `GET /health` is the only open endpoint.
 - Point `TIMESLIPS_FDB` at a **copy** until Slip List confirms writes. Production `...\Databases\Firm\MAIN.FDB` is blocked unless `TIMESLIPS_ALLOW_PRODUCTION=1`.
 - Do not log or return SYSDBA, Firebird SQL, or production paths in API error bodies.

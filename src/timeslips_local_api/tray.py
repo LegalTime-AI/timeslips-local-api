@@ -7,9 +7,10 @@ import sys
 import threading
 from pathlib import Path
 
-from .config import Settings, appdata_dir
+from .config import Settings, appdata_dir, persist_lan
+from .discovery import helper_http_url
 from .health import probe_database
-from .runtime import autostart_enabled, set_autostart
+from .runtime import autostart_enabled, release_single_instance, set_autostart
 
 CREATE_NO_WINDOW = 0x08000000
 
@@ -40,7 +41,7 @@ def show_error(message: str) -> None:
     logging.error(message)
 
 
-def run_tray(settings: Settings, on_stop=None) -> None:
+def run_tray(settings: Settings, on_stop=None, request_exit: threading.Event | None = None) -> None:
     import pystray
     from PIL import Image
 
@@ -51,6 +52,24 @@ def run_tray(settings: Settings, on_stop=None) -> None:
     def on_copy(_icon: object, _item: object) -> None:
         if settings.token:
             copy_text(settings.token)
+
+    def on_copy_address(_icon: object, _item: object) -> None:
+        copy_text(helper_http_url(settings))
+
+    def on_share(_icon: object, _item: object) -> None:
+        enabled = not settings.lan
+        persist_lan(enabled)
+        if on_stop:
+            on_stop()
+        release_single_instance()
+        env = os.environ.copy()
+        env["TIMESLIPS_LAN"] = "1" if enabled else "0"
+        cmd = [sys.executable] if getattr(sys, "frozen", False) else [sys.executable, "-m", "timeslips_local_api"]
+        kwargs: dict = {"env": env, "cwd": os.getcwd(), "start_new_session": True}
+        if sys.platform == "win32":
+            kwargs["creationflags"] = 0x00000008 | 0x00000200
+        subprocess.Popen(cmd, **kwargs)
+        os._exit(0)
 
     def on_quit(icon: pystray.Icon, _item: object) -> None:
         if on_stop:
@@ -71,18 +90,39 @@ def run_tray(settings: Settings, on_stop=None) -> None:
     def database_item(_icon: object) -> str:
         return db_label["text"]
 
-    menu = pystray.Menu(
+    items: list = [
         pystray.MenuItem(
-            f"Running on {settings.bind}:{settings.port}",
+            lambda _: f"Running on {helper_http_url(settings)}",
             lambda: None,
             enabled=False,
         ),
         pystray.MenuItem(database_item, lambda: None, enabled=False),
-        pystray.MenuItem("Copy token", on_copy, enabled=bool(settings.token)),
-        pystray.MenuItem("Start with Windows", on_autostart, checked=lambda _: autostart_enabled()),
-        pystray.MenuItem("Open logs", on_open_logs),
-        pystray.MenuItem("Quit", on_quit),
+    ]
+    items.append(
+        pystray.MenuItem(
+            "Share with other computers",
+            on_share,
+            checked=lambda _: settings.lan,
+        )
     )
+    if settings.lan:
+        items.append(pystray.MenuItem("Copy address", on_copy_address))
+        items.append(
+            pystray.MenuItem(
+                "Allow this app on Private networks in Windows Firewall",
+                lambda: None,
+                enabled=False,
+            )
+        )
+    items.extend(
+        [
+            pystray.MenuItem("Copy token", on_copy, enabled=bool(settings.token)),
+            pystray.MenuItem("Start with Windows", on_autostart, checked=lambda _: autostart_enabled()),
+            pystray.MenuItem("Open logs", on_open_logs),
+            pystray.MenuItem("Quit", on_quit),
+        ]
+    )
+    menu = pystray.Menu(*items)
     icon = pystray.Icon("TimeslipsHelper", image, "Timeslips helper", menu)
     stop = threading.Event()
 
@@ -98,6 +138,18 @@ def run_tray(settings: Settings, on_stop=None) -> None:
     reachable, reason = probe_database(settings)
     db_label["text"] = "Database: OK" if reachable else f"Database: {reason or 'down'}"
     threading.Thread(target=poll_database, daemon=True).start()
+
+    def watch_exit() -> None:
+        if request_exit is None:
+            return
+        request_exit.wait()
+        try:
+            icon.stop()
+        except Exception:  # noqa: BLE001
+            return
+
+    if request_exit is not None:
+        threading.Thread(target=watch_exit, daemon=True).start()
     try:
         icon.run()
     finally:
