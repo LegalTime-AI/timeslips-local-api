@@ -1,6 +1,6 @@
 # timeslips-local-api
 
-Unofficial loopback HTTP API for **Sage Timeslips Premium** (Firebird).
+Unofficial local HTTP API for **Sage Timeslips Premium** (Firebird).
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
@@ -10,7 +10,7 @@ LegalTime AI consumes this helper through a thin desktop adapter. The helper nev
 
 ## Safety
 
-- Binds to `127.0.0.1` only.
+- Binds to `127.0.0.1` unless `TIMESLIPS_LAN=1`, which listens on the private network so LegalTime on another laptop can call it. Do not port-forward that port to the internet.
 - Default database is an exploration copy, not `...\Databases\Firm\MAIN.FDB`.
 - Production firm files are **refused** unless `TIMESLIPS_ALLOW_PRODUCTION=1` (do not set this casually).
 - Copy Slip List confirmation on this project’s test VM: 2026-09-20, `RECORDID` 104084 / `TRANSID` 104070. See [docs/GUI.md](docs/GUI.md).
@@ -20,6 +20,10 @@ LegalTime AI consumes this helper through a thin desktop adapter. The helper nev
 Download **TimeslipsHelper.exe** from [Releases](https://github.com/LegalTime-AI/timeslips-local-api/releases/latest). Run it on the Windows computer that has Timeslips Premium. It is a windowed tray app: no terminal, one instance, auto-start at logon, and it keeps serving if Firebird is briefly down. Copy `pack/timeslips-helper.env.example` next to the exe as `timeslips-helper.env` and set `TIMESLIPS_FDB` to a **copy** of `MAIN.FDB`. On start it writes the token it is actually using to `%LOCALAPPDATA%\TimeslipsHelper\timeslips-helper.env` so LegalTime can call `/v1/clients` and `/v1/activities`. Quit from the tray menu.
 
 The helper still needs Timeslips Premium’s Firebird server (`FirebirdServerSageTimeslips`).
+
+To let LegalTime on another laptop on the same private network (office LAN or a VPN such as Tailscale) read and write slips, choose **Share with other computers** in the helper menu. That saves `TIMESLIPS_LAN=1` and reopens the helper. Allow `TimeslipsHelper.exe` on Private networks in Windows Firewall. The tray shows the address and can copy it. A UDP beacon on port `3052` announces the computer name and port only — never the token — on both the limited broadcast and each subnet broadcast. Paste the token from **Copy token** into LegalTime on the other laptop once. `GET /health` stays unauthenticated so LegalTime can show the Timeslips computer as online or offline. All `/v1` reads and writes still require the bearer token.
+
+A packed helper checks GitHub releases on its own, verifies `SHA256SUMS`, and replaces itself. Set `TIMESLIPS_NO_UPDATE=1` to skip that. Dev runs do not update.
 
 Developer install from source:
 
@@ -36,7 +40,7 @@ python -m timeslips_local_api
 
 Pack a Windows exe: `python -m pip install -e ".[pack]"` then `pyinstaller --noconfirm pack/timeslips-helper.spec`. The file is `dist/TimeslipsHelper.exe` (windowed, no console). Logs rotate under `%LOCALAPPDATA%\TimeslipsHelper\helper.log`. Copy token from the tray menu. `GET /health` is unauthenticated liveness plus a finite database reason; it never includes paths or Sage credentials.
 
-Listens on `http://127.0.0.1:3051`.
+Listens on `http://127.0.0.1:3051`, or on every interface at that port when `TIMESLIPS_LAN=1`.
 
 - `GET /health` — unauthenticated
 - All `/v1/*` — `Authorization: Bearer <token>`

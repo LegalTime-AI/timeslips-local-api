@@ -45,6 +45,18 @@ def acquire_single_instance() -> bool:
     return not already
 
 
+def release_single_instance() -> None:
+    """Drop the Windows mutex so a replacement helper can start."""
+    global _mutex_handle
+    handle = _mutex_handle
+    _mutex_handle = None
+    if not handle or sys.platform != "win32":
+        return
+    kernel32 = ctypes.windll.kernel32
+    kernel32.ReleaseMutex(ctypes.c_void_p(handle))
+    kernel32.CloseHandle(ctypes.c_void_p(handle))
+
+
 def autostart_enabled() -> bool:
     if sys.platform != "win32":
         return False

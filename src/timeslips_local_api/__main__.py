@@ -13,17 +13,19 @@ import urllib.request
 import uvicorn
 
 from .app import app, get_settings
-from .config import load_settings, persist_running_token
+from .config import load_settings, persist_running_token, resolve_bind
+from .discovery import advertise
 from .health import database_watch
 from .runtime import acquire_single_instance, configure_file_logging, enable_autostart_once
 from .tray import run_tray, show_error
+from .update import apply_update, update_watch, updates_enabled
 
 
-def _server(settings) -> uvicorn.Server:
+def _server(settings, bind: str) -> uvicorn.Server:
     return uvicorn.Server(
         uvicorn.Config(
             app,
-            host=settings.bind,
+            host=bind,
             port=settings.port,
             reload=False,
             access_log=False,
@@ -32,8 +34,14 @@ def _server(settings) -> uvicorn.Server:
     )
 
 
-def _existing_helper_healthy(settings) -> bool:
-    url = f"http://{settings.bind}:{settings.port}/health"
+def _health_host(bind: str) -> str:
+    if bind in {"0.0.0.0", "::", "localhost"}:
+        return "127.0.0.1"
+    return bind
+
+
+def _existing_helper_healthy(settings, bind: str) -> bool:
+    url = f"http://{_health_host(bind)}:{settings.port}/health"
     try:
         with urllib.request.urlopen(url, timeout=2) as response:
             return response.status == 200
@@ -41,10 +49,10 @@ def _existing_helper_healthy(settings) -> bool:
         return False
 
 
-def _serve_until_stop(settings, stop: threading.Event, holder: list) -> None:
+def _serve_until_stop(settings, bind: str, stop: threading.Event, holder: list) -> None:
     backoff = 1.0
     while not stop.is_set():
-        server = _server(settings)
+        server = _server(settings, bind)
         holder[:] = [server]
         try:
             server.run()
@@ -62,15 +70,22 @@ def _serve_until_stop(settings, stop: threading.Event, holder: list) -> None:
 
 def main() -> None:
     multiprocessing.freeze_support()
+    if len(sys.argv) >= 2 and sys.argv[1] == "--apply-update":
+        if len(sys.argv) != 4:
+            raise SystemExit("usage: TimeslipsHelper --apply-update <downloaded> <dest>")
+        apply_update(sys.argv[2], sys.argv[3])
+        return
     frozen = getattr(sys, "frozen", False)
     if frozen:
         configure_file_logging()
     settings = load_settings()
-    if settings.bind not in {"127.0.0.1", "localhost", "::1"}:
-        show_error("TIMESLIPS_BIND must be a loopback address.")
-        raise SystemExit("TIMESLIPS_BIND must be a loopback address")
+    try:
+        bind = resolve_bind(settings)
+    except ValueError as exc:
+        show_error(str(exc))
+        raise SystemExit(str(exc)) from exc
     if not acquire_single_instance():
-        if _existing_helper_healthy(settings):
+        if _existing_helper_healthy(settings, bind):
             raise SystemExit(0)
         show_error("Timeslips helper is already running.")
         raise SystemExit(0)
@@ -84,9 +99,10 @@ def main() -> None:
     else:
         persist_running_token(settings.token)
     logging.info(
-        "listening on %s:%s write_backend=%s production_blocked=%s",
-        settings.bind,
+        "listening on %s:%s lan=%s write_backend=%s production_blocked=%s",
+        bind,
         settings.port,
+        settings.lan,
         settings.write_backend,
         settings.production_blocked,
     )
@@ -95,23 +111,36 @@ def main() -> None:
 
     stop = threading.Event()
     holder: list = []
+    request_exit = threading.Event()
     threading.Thread(target=database_watch, args=(settings, stop), daemon=True).start()
+    if settings.lan:
+        threading.Thread(target=advertise, args=(settings, stop), daemon=True).start()
     worker = threading.Thread(
         target=_serve_until_stop,
-        args=(settings, stop, holder),
+        args=(settings, bind, stop, holder),
         daemon=True,
     )
+
+    def shutdown() -> None:
+        stop.set()
+        request_exit.set()
+        if holder:
+            holder[0].should_exit = True
+
+    if updates_enabled():
+        threading.Thread(target=update_watch, args=(stop, shutdown), daemon=True).start()
+
     no_tray = os.environ.get("TIMESLIPS_NO_TRAY") == "1"
     if no_tray or (
         not frozen
         and _missing_tray_deps()
     ):
-        _serve_until_stop(settings, stop, holder)
+        _serve_until_stop(settings, bind, stop, holder)
         return
 
     worker.start()
     deadline = time.time() + 2
-    while time.time() < deadline and not _existing_helper_healthy(settings):
+    while time.time() < deadline and not _existing_helper_healthy(settings, bind):
         time.sleep(0.1)
     if not worker.is_alive():
         show_error(
@@ -119,13 +148,8 @@ def main() -> None:
         )
         raise SystemExit(1)
 
-    def shutdown() -> None:
-        stop.set()
-        if holder:
-            holder[0].should_exit = True
-
     try:
-        run_tray(settings, on_stop=shutdown)
+        run_tray(settings, on_stop=shutdown, request_exit=request_exit)
     except Exception as exc:
         logging.exception("tray failed")
         show_error(f"Timeslips helper is running, but the tray icon could not start.\n{exc}")
