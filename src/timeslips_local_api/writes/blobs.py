@@ -122,12 +122,22 @@ def _patch_length(blob: bytearray, start: int, old_len: int, new_len: int, old_c
             return
 
 
-def encode_slip_description(template: bytes, text: str) -> bytes:
-    """Keep a native Timeslips description stream and replace only its text.
+def _fit_encoded(text: str, size: int, encoding: str) -> bytes:
+    raw = text.encode(encoding)
+    if encoding == "utf-16le":
+        size -= size % 2
+        raw = raw[:size]
+        pad = b"\x20\x00" * ((size - len(raw)) // 2)
+        return raw + pad
+    raw = raw[:size]
+    return raw + b" " * (size - len(raw))
 
-    Inventing a length-prefixed UTF-16 blob makes Slip Entry report
-    "unknown object found". Copying the template stream leaves a slip
-    Timeslips can open.
+
+def encode_slip_description(template: bytes, text: str) -> bytes:
+    """Keep the native stream byte-for-byte and replace only its text.
+
+    Changing the stream length makes Slip Entry report an unknown object.
+    The replacement stays the same size as the words already in the template.
     """
     text = text or ""
     if not template:
@@ -138,10 +148,8 @@ def encode_slip_description(template: bytes, text: str) -> bytes:
     start, end, old, encoding = max(runs, key=lambda run: len(run[2]))
     if not old.strip():
         return template
-    new_bytes = text.encode(encoding)
-    updated = bytearray(template)
-    _patch_length(updated, start, end - start, len(new_bytes), len(old), len(text))
-    return bytes(updated[:start] + new_bytes + updated[end:])
+    new_bytes = _fit_encoded(text, end - start, encoding)
+    return template[:start] + new_bytes + template[end:]
 
 
 def rewrite_slip_blobs(

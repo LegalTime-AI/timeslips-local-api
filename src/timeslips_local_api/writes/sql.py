@@ -56,15 +56,28 @@ def _column_types(cur) -> list[tuple[str, int | None]]:
 
 
 def _template_row(cur) -> tuple[dict, list[tuple[str, int | None]]]:
+    # Clone a slip this helper did not write. SLIPSOURCE 1 is the helper.
+    # Cloning our own newest row copies a broken description stream forward.
     cur.execute(
         """
         SELECT FIRST 1 *
         FROM SLPTRANS
         WHERE TRANSTYPE = 1 AND BILLED = 0 AND INVOICEID = 0
+          AND SLIPSOURCE IS DISTINCT FROM 1
         ORDER BY RECORDID DESC
         """
     )
     row = cur.fetchone()
+    if not row:
+        cur.execute(
+            """
+            SELECT FIRST 1 *
+            FROM SLPTRANS
+            WHERE TRANSTYPE = 1 AND BILLED = 0 AND INVOICEID = 0
+            ORDER BY RECORDID ASC
+            """
+        )
+        row = cur.fetchone()
     if not row:
         raise ApiError(503, "no native unbilled time slip to clone rates from")
     columns = _column_types(cur)
@@ -79,11 +92,24 @@ def _next_ids(cur) -> tuple[int, int]:
     return record, trans
 
 
-def _apply_time(row: dict, duration_seconds: int, rate: float, billable: bool, day: date) -> None:
+def _apply_time(
+    row: dict,
+    duration_seconds: int,
+    rate: float,
+    billable: bool,
+    day: date,
+    ticks_per_hour: int,
+) -> None:
     hours = _hours(duration_seconds)
-    row["STARTDATE"] = date_to_delphi(day)
-    row["ENDDATE"] = date_to_delphi(day)
-    row["TIMESPENT"] = duration_seconds
+    new_day = date_to_delphi(day)
+    old_dates = {row.get("STARTDATE"), row.get("ENDDATE")}
+    old_dates.discard(None)
+    row["STARTDATE"] = new_day
+    row["ENDDATE"] = new_day
+    for key, value in list(row.items()):
+        if key not in ("STARTDATE", "ENDDATE") and value in old_dates:
+            row[key] = new_day
+    row["TIMESPENT"] = max(1, int(round(duration_seconds * ticks_per_hour / 3600)))
     row["TIMEUNBILLABLE"] = 0 if billable else duration_seconds
     row["TRANSVALUE"] = round(rate * hours, 4) if billable else 0
     row["BILLSTATUS"] = 1 if billable else 3
@@ -111,7 +137,7 @@ class SqlSlipWriter:
         record_id, trans_id = _next_ids(cur)
         rate = float(template.get("RATEVALUE") or 0)
         row = dict(template)
-        _apply_time(row, payload.durationSeconds, rate, payload.billable, day)
+        _apply_time(row, payload.durationSeconds, rate, payload.billable, day, _ticks_per_hour(cur))
         row["RECORDID"] = record_id
         row["TRANSID"] = trans_id
         row["EDITCOUNT"] = 1
@@ -177,7 +203,7 @@ class SqlSlipWriter:
 
             day = delphi_to_date(row["STARTDATE"]) or date.today()
         rate = float(row.get("RATEVALUE") or 0)
-        _apply_time(row, duration, rate, billable, day)
+        _apply_time(row, duration, rate, billable, day, _ticks_per_hour(cur))
         template_description = row.get("DESCRIPTION")
         if patch.description is not None:
             row["DESCRIPTION"] = patch.description

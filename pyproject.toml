@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "timeslips-local-api"
-version = "0.4.4"
+version = "0.4.5"
 description = "Unofficial local HTTP API for Sage Timeslips Premium (Firebird)."
 readme = "README.md"
 requires-python = ">=3.11"

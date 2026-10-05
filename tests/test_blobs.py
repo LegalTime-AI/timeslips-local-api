@@ -47,7 +47,9 @@ def test_firebird_blob_columns_keep_the_full_time_entry() -> None:
     template = len("Old note").to_bytes(4, "little") + template
     row["DESCRIPTION"] = template
     rewrite_slip_blobs(row, columns, description, template)
-    assert row["DESCRIPTION"] == len(description).to_bytes(4, "little") + description.encode("utf-16le")
+    assert len(row["DESCRIPTION"]) == len(template)
+    assert row["DESCRIPTION"].startswith(len("Old note").to_bytes(4, "little"))
+    assert b"R\x00e\x00v\x00i\x00e\x00w\x00e\x00d\x00" in row["DESCRIPTION"]
     assert row["CUSTOMTEXT"] == b""
     assert row["NOTES"] == b"native-notes-complete"
     assert row["USERID"] == 12
@@ -68,6 +70,7 @@ def test_description_replaces_text_inside_the_native_stream() -> None:
     encoded = encode_slip_description(template, text)
     assert encoded.startswith(header)
     assert encoded.endswith(trailer)
-    assert text.encode("utf-16le") in encoded
-    assert encoded != len(text).to_bytes(4, "little") + text.encode("utf-16le")
-    assert int.from_bytes(encoded[len(header) : len(header) + 2], "little") == len(text)
+    assert encoded.startswith(header)
+    assert encoded.endswith(trailer)
+    assert len(encoded) == len(template)
+    assert int.from_bytes(encoded[len(header) : len(header) + 2], "little") == len(old)
