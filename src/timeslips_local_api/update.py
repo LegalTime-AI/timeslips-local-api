@@ -123,24 +123,83 @@ def _download(url: str, dest: Path) -> None:
     os.replace(tmp, dest)
 
 
-def apply_update(downloaded: str, dest: str) -> None:
-    """Replace the running helper after this process is spawned detached."""
-    source = Path(downloaded)
-    target = Path(dest)
-    deadline = time.time() + 60
-    while True:
+def apply_command(downloaded: str, dest: str, parent_pid: int) -> list[str]:
+    return ["--apply-update", downloaded, dest, str(parent_pid)]
+
+
+def _pid_alive(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    if sys.platform != "win32":
         try:
-            os.replace(source, target)
-            break
-        except OSError:
-            if time.time() > deadline:
-                logging.exception("helper update could not replace %s", target)
-                raise SystemExit(1)
-            time.sleep(0.25)
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+        return True
+    import ctypes
+
+    kernel32 = ctypes.windll.kernel32
+    handle = kernel32.OpenProcess(0x1000, False, pid)
+    if not handle:
+        return False
+    code = ctypes.c_ulong()
+    ok = kernel32.GetExitCodeProcess(handle, ctypes.byref(code))
+    kernel32.CloseHandle(handle)
+    return bool(ok) and code.value == 259
+
+
+def wait_for_exit(pid: int, timeout: float) -> bool:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if not _pid_alive(pid):
+            return True
+        time.sleep(0.25)
+    return not _pid_alive(pid)
+
+
+def _start_helper(target: Path) -> None:
     flags = 0
     if sys.platform == "win32":
         flags = _DETACHED | _NEW_GROUP
     subprocess.Popen([str(target)], close_fds=True, creationflags=flags)
+
+
+def apply_update(
+    downloaded: str,
+    dest: str,
+    parent_pid: int | None = None,
+    *,
+    wait_timeout: float = 45,
+    replace_timeout: float = 30,
+) -> None:
+    """Replace the exe only after the running helper has exited, then start it.
+
+    If the new file cannot be swapped in, start the exe that is still on disk
+    so the helper does not stay silent.
+    """
+    source = Path(downloaded)
+    target = Path(dest)
+    if parent_pid and not wait_for_exit(parent_pid, wait_timeout):
+        logging.error("helper update parent %s did not exit; leaving it running", parent_pid)
+        raise SystemExit(1)
+    deadline = time.time() + replace_timeout
+    replaced = False
+    while True:
+        try:
+            os.replace(source, target)
+            replaced = True
+            break
+        except OSError:
+            if time.time() > deadline:
+                logging.exception("helper update could not replace %s", target)
+                break
+            time.sleep(0.25)
+    if target.is_file():
+        _start_helper(target)
+    if not replaced:
+        raise SystemExit(1)
 
 
 def _spawn_apply(downloaded: Path, dest: Path) -> None:
@@ -148,7 +207,7 @@ def _spawn_apply(downloaded: Path, dest: Path) -> None:
     if sys.platform == "win32":
         flags = _DETACHED | _NEW_GROUP | _NO_WINDOW
     subprocess.Popen(
-        [sys.executable, "--apply-update", str(downloaded), str(dest)],
+        [sys.executable, *apply_command(str(downloaded), str(dest), os.getpid())],
         close_fds=True,
         creationflags=flags,
     )

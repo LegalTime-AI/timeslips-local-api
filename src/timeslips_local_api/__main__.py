@@ -17,7 +17,12 @@ from .config import frozen_exe_path, load_settings, persist_running_token, resol
 from .discovery import advertise
 from .health import database_watch
 from .install import configure_first_run, ensure_private_firewall
-from .runtime import acquire_single_instance, configure_file_logging, enable_autostart_once
+from .runtime import (
+    acquire_single_instance,
+    configure_file_logging,
+    enable_autostart_once,
+    release_single_instance,
+)
 from .tray import run_tray, show_error
 from .update import apply_update, update_watch, updates_enabled
 
@@ -72,9 +77,10 @@ def _serve_until_stop(settings, bind: str, stop: threading.Event, holder: list) 
 def main() -> None:
     multiprocessing.freeze_support()
     if len(sys.argv) >= 2 and sys.argv[1] == "--apply-update":
-        if len(sys.argv) != 4:
-            raise SystemExit("usage: TimeslipsHelper --apply-update <downloaded> <dest>")
-        apply_update(sys.argv[2], sys.argv[3])
+        if len(sys.argv) not in (4, 5):
+            raise SystemExit("usage: TimeslipsHelper --apply-update <downloaded> <dest> [parent-pid]")
+        parent = int(sys.argv[4]) if len(sys.argv) == 5 else None
+        apply_update(sys.argv[2], sys.argv[3], parent)
         return
     frozen = getattr(sys, "frozen", False)
     if frozen:
@@ -156,10 +162,15 @@ def main() -> None:
         if holder:
             holder[0].should_exit = True
 
+    def exit_for_update() -> None:
+        shutdown()
+        release_single_instance()
+        os._exit(0)
+
     if updates_enabled():
         threading.Thread(
             target=update_watch,
-            args=(stop, shutdown, database_down),
+            args=(stop, exit_for_update, database_down),
             daemon=True,
         ).start()
 

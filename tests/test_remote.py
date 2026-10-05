@@ -9,6 +9,8 @@ from timeslips_local_api import discovery
 from timeslips_local_api.health import health_payload
 from timeslips_local_api.update import (
     PROBLEM_CHECK_SECONDS,
+    apply_command,
+    apply_update,
     asset_url,
     checksum_matches,
     parse_sha256_sums,
@@ -122,3 +124,61 @@ def test_database_problem_checks_before_the_regular_interval() -> None:
         next_problem=100 + PROBLEM_CHECK_SECONDS,
         database_down=True,
     )
+
+
+def test_apply_command_names_the_running_process() -> None:
+    assert apply_command("new.exe", "TimeslipsHelper.exe", 42) == [
+        "--apply-update",
+        "new.exe",
+        "TimeslipsHelper.exe",
+        "42",
+    ]
+
+
+def test_update_waits_until_the_running_helper_exits(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    current = tmp_path / "TimeslipsHelper.exe"
+    current.write_bytes(b"old")
+    downloaded = tmp_path / "new.exe"
+    downloaded.write_bytes(b"new")
+    monkeypatch.setattr("timeslips_local_api.update._pid_alive", lambda _pid: True)
+    with pytest.raises(SystemExit):
+        apply_update(str(downloaded), str(current), 99, wait_timeout=0, replace_timeout=0)
+    assert current.read_bytes() == b"old"
+
+
+def test_failed_replace_starts_the_exe_still_on_disk(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    current = tmp_path / "TimeslipsHelper.exe"
+    current.write_bytes(b"old")
+    downloaded = tmp_path / "new.exe"
+    downloaded.write_bytes(b"new")
+    started: list[list[str]] = []
+    monkeypatch.setattr("timeslips_local_api.update._pid_alive", lambda _pid: False)
+
+    def refuse_replace(*_args: object, **_kwargs: object) -> None:
+        raise OSError("busy")
+
+    monkeypatch.setattr("timeslips_local_api.update.os.replace", refuse_replace)
+    monkeypatch.setattr(
+        "timeslips_local_api.update.subprocess.Popen",
+        lambda cmd, **_kwargs: started.append(list(cmd)),
+    )
+    with pytest.raises(SystemExit):
+        apply_update(str(downloaded), str(current), 99, wait_timeout=0, replace_timeout=0)
+    assert current.read_bytes() == b"old"
+    assert started == [[str(current)]]
+
+
+def test_successful_replace_starts_the_new_exe(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    current = tmp_path / "TimeslipsHelper.exe"
+    current.write_bytes(b"old")
+    downloaded = tmp_path / "new.exe"
+    downloaded.write_bytes(b"new")
+    started: list[list[str]] = []
+    monkeypatch.setattr("timeslips_local_api.update._pid_alive", lambda _pid: False)
+    monkeypatch.setattr(
+        "timeslips_local_api.update.subprocess.Popen",
+        lambda cmd, **_kwargs: started.append(list(cmd)),
+    )
+    apply_update(str(downloaded), str(current), 99, wait_timeout=0, replace_timeout=1)
+    assert current.read_bytes() == b"new"
+    assert started == [[str(current)]]
