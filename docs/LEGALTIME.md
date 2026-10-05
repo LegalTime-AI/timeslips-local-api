@@ -23,6 +23,6 @@ Same-computer use stays on `http://127.0.0.1:3051` and reads the token from `%LO
 
 LegalTime on another laptop may call that host only when the address is loopback, private (RFC1918), link-local, or Tailscale (`100.64.0.0/10`). The token is pasted once in LegalTime. It is not in the beacon. Portal occupancy still means Timeslips is the connected billing system when the helper is offline.
 
-When Timeslips is occupied on the portal and the helper is down or Firebird is unreachable, LegalTime reports a privacy-safe operational issue to Sentry (`helper:not_running`, `helper:unresponsive`, `helper:database_unreachable`, `helper:token_missing`, `helper:token_mismatch`) with a finite `diagnostic_code`. Paths and Sage credentials never leave the helper.
+When Timeslips is occupied on the portal and the helper is down or Firebird is unreachable, LegalTime reports a privacy-safe operational issue to Sentry (`helper:not_running`, `helper:unresponsive`, `helper:database_unreachable`, `helper:token_missing`, `helper:token_mismatch`) with a finite `diagnostic_code`. Paths and Sage credentials never leave the helper. A packed helper that cannot reach the database checks GitHub for a newer build immediately, then about every 15 minutes, and replaces itself only when `SHA256SUMS` matches. That replaces the helper program. It does not modify the Timeslips database.
 
 Reserved capabilities (`expenses`, `references`, `invoices`) return 501 so the adapter can feature-detect from `GET /v1/status`.

@@ -107,13 +107,6 @@ def run_tray(settings: Settings, on_stop=None, request_exit: threading.Event | N
     )
     if settings.lan:
         items.append(pystray.MenuItem("Copy address", on_copy_address))
-        items.append(
-            pystray.MenuItem(
-                "Allow this app on Private networks in Windows Firewall",
-                lambda: None,
-                enabled=False,
-            )
-        )
     items.extend(
         [
             pystray.MenuItem("Copy token", on_copy, enabled=bool(settings.token)),

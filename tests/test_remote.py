@@ -8,10 +8,12 @@ from timeslips_local_api.discovery import beacon_payload, broadcast_destinations
 from timeslips_local_api import discovery
 from timeslips_local_api.health import health_payload
 from timeslips_local_api.update import (
+    PROBLEM_CHECK_SECONDS,
     asset_url,
     checksum_matches,
     parse_sha256_sums,
     release_is_newer,
+    update_due,
     updates_enabled,
     version_tuple,
 )
@@ -102,3 +104,21 @@ def test_checksum_match_does_not_call_github(tmp_path: Path) -> None:
         "TimeslipsHelper.exe",
     ) is None
     assert updates_enabled() is False
+
+
+def test_database_problem_checks_before_the_regular_interval() -> None:
+    assert update_due(now=100, next_regular=0, next_problem=0, database_down=False)
+    assert not update_due(now=100, next_regular=500, next_problem=0, database_down=False)
+    assert update_due(now=100, next_regular=500, next_problem=0, database_down=True)
+    assert not update_due(
+        now=100,
+        next_regular=500,
+        next_problem=100 + PROBLEM_CHECK_SECONDS,
+        database_down=True,
+    )
+    assert update_due(
+        now=100 + PROBLEM_CHECK_SECONDS,
+        next_regular=10_000,
+        next_problem=100 + PROBLEM_CHECK_SECONDS,
+        database_down=True,
+    )

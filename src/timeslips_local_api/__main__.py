@@ -13,9 +13,10 @@ import urllib.request
 import uvicorn
 
 from .app import app, get_settings
-from .config import load_settings, persist_running_token, resolve_bind
+from .config import frozen_exe_path, load_settings, persist_running_token, resolve_bind
 from .discovery import advertise
 from .health import database_watch
+from .install import configure_first_run, ensure_private_firewall
 from .runtime import acquire_single_instance, configure_file_logging, enable_autostart_once
 from .tray import run_tray, show_error
 from .update import apply_update, update_watch, updates_enabled
@@ -79,16 +80,25 @@ def main() -> None:
     if frozen:
         configure_file_logging()
     settings = load_settings()
+    if not acquire_single_instance():
+        try:
+            bind = resolve_bind(settings)
+        except ValueError:
+            bind = "127.0.0.1"
+        if _existing_helper_healthy(settings, bind):
+            raise SystemExit(0)
+        show_error("Timeslips helper is already running.")
+        raise SystemExit(0)
+    prepared = configure_first_run(settings)
+    if prepared is None:
+        show_error("Choose the Timeslips database (MAIN.FDB) to continue.")
+        raise SystemExit(1)
+    settings = prepared
     try:
         bind = resolve_bind(settings)
     except ValueError as exc:
         show_error(str(exc))
         raise SystemExit(str(exc)) from exc
-    if not acquire_single_instance():
-        if _existing_helper_healthy(settings, bind):
-            raise SystemExit(0)
-        show_error("Timeslips helper is already running.")
-        raise SystemExit(0)
     if not settings.token:
         token = secrets.token_hex(24)
         os.environ["TIMESLIPS_TOKEN"] = token
@@ -108,11 +118,30 @@ def main() -> None:
     )
     if frozen:
         enable_autostart_once()
+        if settings.lan:
+            exe = frozen_exe_path()
+            if exe is not None:
+                ensure_private_firewall(exe)
 
     stop = threading.Event()
     holder: list = []
     request_exit = threading.Event()
-    threading.Thread(target=database_watch, args=(settings, stop), daemon=True).start()
+    database_down = threading.Event()
+
+    def on_database(reachable: bool, reason: str | None) -> None:
+        if reachable:
+            database_down.clear()
+            return
+        if not database_down.is_set():
+            logging.info("database unavailable (%s); checking for a helper update", reason or "down")
+        database_down.set()
+
+    threading.Thread(
+        target=database_watch,
+        args=(settings, stop),
+        kwargs={"on_result": on_database},
+        daemon=True,
+    ).start()
     if settings.lan:
         threading.Thread(target=advertise, args=(settings, stop), daemon=True).start()
     worker = threading.Thread(
@@ -128,7 +157,11 @@ def main() -> None:
             holder[0].should_exit = True
 
     if updates_enabled():
-        threading.Thread(target=update_watch, args=(stop, shutdown), daemon=True).start()
+        threading.Thread(
+            target=update_watch,
+            args=(stop, shutdown, database_down),
+            daemon=True,
+        ).start()
 
     no_tray = os.environ.get("TIMESLIPS_NO_TRAY") == "1"
     if no_tray or (

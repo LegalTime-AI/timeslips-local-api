@@ -154,13 +154,49 @@ def _upsert_env_value(path: Path, key: str, value: str) -> None:
     path.write_text("\n".join(out) + "\n", encoding="utf-8")
 
 
-def persist_lan(enabled: bool) -> None:
-    """Remember whether other computers on this network may connect. Takes effect on the next launch."""
-    value = "1" if enabled else "0"
-    _upsert_env_value(appdata_env_file(), "TIMESLIPS_LAN", value)
+def _persist_both(key: str, value: str) -> None:
+    _upsert_env_value(appdata_env_file(), key, value)
     sidecar = sidecar_env_file()
     if sidecar != appdata_env_file():
-        _upsert_env_value(sidecar, "TIMESLIPS_LAN", value)
+        _upsert_env_value(sidecar, key, value)
+
+
+def _env_value_is_set(key: str) -> bool:
+    if os.environ.get(key, "").strip():
+        return True
+    prefix = f"{key}="
+    for path in _env_files():
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            continue
+        if any(line.startswith(prefix) and line.split("=", 1)[1].strip() for line in lines):
+            return True
+    return False
+
+
+def lan_is_explicit() -> bool:
+    """True when this PC already chose sharing on or off."""
+    return _env_value_is_set("TIMESLIPS_LAN")
+
+
+def fdb_is_explicit() -> bool:
+    """True when a database path was saved. A missing file then stays a tray error."""
+    return _env_value_is_set("TIMESLIPS_FDB")
+
+
+def persist_lan(enabled: bool) -> None:
+    """Remember whether other computers on this network may connect. Takes effect on the next launch."""
+    _persist_both("TIMESLIPS_LAN", "1" if enabled else "0")
+
+
+def persist_database_setup(path: str, *, allow_production: bool, enable_lan: bool) -> None:
+    """Save the database chosen at first launch."""
+    _persist_both("TIMESLIPS_FDB", path)
+    if allow_production:
+        _persist_both("TIMESLIPS_ALLOW_PRODUCTION", "1")
+    if enable_lan:
+        persist_lan(True)
 
 
 def persist_running_token(token: str) -> None:

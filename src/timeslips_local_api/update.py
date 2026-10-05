@@ -19,6 +19,7 @@ RELEASES_URL = "https://api.github.com/repos/LegalTime-AI/timeslips-local-api/re
 ASSET_NAME = "TimeslipsHelper.exe"
 SUMS_NAME = "SHA256SUMS"
 CHECK_INTERVAL_SECONDS = 6 * 60 * 60
+PROBLEM_CHECK_SECONDS = 15 * 60
 _DETACHED = 0x00000008
 _NEW_GROUP = 0x00000200
 _NO_WINDOW = 0x08000000
@@ -190,13 +191,38 @@ def check_for_update() -> bool:
     return True
 
 
-def update_watch(stop: threading.Event, on_ready) -> None:
+def update_due(*, now: float, next_regular: float, next_problem: float, database_down: bool) -> bool:
+    """A healthy helper checks on the long interval. A down database checks sooner."""
+    return now >= next_regular or (database_down and now >= next_problem)
+
+
+def update_watch(
+    stop: threading.Event,
+    on_ready,
+    database_down: threading.Event | None = None,
+) -> None:
+    down = database_down or threading.Event()
+    next_regular = 0.0
+    next_problem = 0.0
     while not stop.is_set():
-        try:
-            if check_for_update():
-                on_ready()
-                return
-        except Exception:
-            logging.exception("helper update failed")
-        if stop.wait(CHECK_INTERVAL_SECONDS):
+        now = time.monotonic()
+        is_down = down.is_set()
+        if update_due(
+            now=now,
+            next_regular=next_regular,
+            next_problem=next_problem,
+            database_down=is_down,
+        ):
+            try:
+                if check_for_update():
+                    on_ready()
+                    return
+            except Exception:
+                logging.exception("helper update failed")
+            checked = time.monotonic()
+            if now >= next_regular:
+                next_regular = checked + CHECK_INTERVAL_SECONDS
+            if is_down:
+                next_problem = checked + PROBLEM_CHECK_SECONDS
+        if stop.wait(5):
             return

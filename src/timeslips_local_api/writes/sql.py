@@ -7,6 +7,7 @@ from timeslips_local_api.errors import ApiError, BadRequestError, ConflictError,
 from timeslips_local_api.firebird import as_text  # noqa: F401
 from timeslips_local_api.ledger import Ledger
 from timeslips_local_api.models import SlipCreate, SlipPatch
+from timeslips_local_api.writes.blobs import field_type_code, rewrite_slip_blobs
 
 COUNTER_RECORD = 100060
 COUNTER_TRANS = 5
@@ -50,7 +51,11 @@ def _ticks_per_hour(cur) -> int:
     return int(round(ticks)) or 3600
 
 
-def _template_row(cur) -> dict:
+def _column_types(cur) -> list[tuple[str, int | None]]:
+    return [(d[0], field_type_code(d)) for d in cur.description]
+
+
+def _template_row(cur) -> tuple[dict, list[tuple[str, int | None]]]:
     cur.execute(
         """
         SELECT FIRST 1 *
@@ -62,8 +67,8 @@ def _template_row(cur) -> dict:
     row = cur.fetchone()
     if not row:
         raise ApiError(503, "no native unbilled time slip to clone rates from")
-    cols = [d[0] for d in cur.description]
-    return dict(zip(cols, row))
+    columns = _column_types(cur)
+    return dict(zip((name for name, _code in columns), row)), columns
 
 
 def _next_ids(cur) -> tuple[int, int]:
@@ -102,7 +107,7 @@ class SqlSlipWriter:
         client_id = _name_id(cur, payload.clientNickname, NAME_CLIENT)
         activity_id = _name_id(cur, payload.activityNickname, NAME_ACTIVITY)
         day = date.fromisoformat(payload.date)
-        template = _template_row(cur)
+        template, columns = _template_row(cur)
         record_id, trans_id = _next_ids(cur)
         rate = float(template.get("RATEVALUE") or 0)
         row = dict(template)
@@ -128,6 +133,7 @@ class SqlSlipWriter:
         row["UNDOSLIPVALUE"] = 0
         row["DESCRIPTION"] = payload.description
         row["CUSTOMTEXT"] = as_text(template.get("CUSTOMTEXT"))
+        rewrite_slip_blobs(row, columns, payload.description)
         cols = list(template.keys())
         cur.execute(
             f"INSERT INTO SLPTRANS ({', '.join(cols)}) VALUES ({', '.join('?' for _ in cols)})",
@@ -151,7 +157,8 @@ class SqlSlipWriter:
         raw = cur.fetchone()
         if not raw:
             raise NotFoundError("slip not found")
-        cols = [d[0] for d in cur.description]
+        columns = _column_types(cur)
+        cols = [name for name, _code in columns]
         row = dict(zip(cols, raw))
         if int(row.get("BILLED") or 0) or int(row.get("INVOICEID") or 0):
             raise ConflictError("cannot change a billed or invoiced slip")
@@ -173,6 +180,7 @@ class SqlSlipWriter:
         _apply_time(row, duration, rate, billable, day)
         if patch.description is not None:
             row["DESCRIPTION"] = patch.description
+        rewrite_slip_blobs(row, columns, patch.description)
         row["EDITCOUNT"] = int(row.get("EDITCOUNT") or 0) + 1
         assignments = ", ".join(f"{c} = ?" for c in cols if c != "RECORDID")
         values = [row[c] for c in cols if c != "RECORDID"]

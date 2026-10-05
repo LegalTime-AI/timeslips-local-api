@@ -34,5 +34,5 @@ jobs:
           if gh release view "${{ github.ref_name }}" >/dev/null 2>&1; then
             gh release upload "${{ github.ref_name }}" dist/TimeslipsHelper.exe dist/SHA256SUMS --clobber
           else
-            gh release create "${{ github.ref_name }}" dist/TimeslipsHelper.exe dist/SHA256SUMS --generate-notes --verify-tag
+            gh release create "${{ github.ref_name }}" dist/TimeslipsHelper.exe dist/SHA256SUMS --generate-notes --verify-tag --latest=false
           fi

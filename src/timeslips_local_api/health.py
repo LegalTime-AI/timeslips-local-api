@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import threading
 from pathlib import Path
 
@@ -82,10 +83,20 @@ def set_database_snapshot(reachable: bool, reason: str | None) -> None:
         _cache = {"reachable": reachable, "reason": reason}
 
 
-def database_watch(settings: Settings, stop: threading.Event, interval_seconds: float = 30) -> None:
+def database_watch(
+    settings: Settings,
+    stop: threading.Event,
+    interval_seconds: float = 30,
+    on_result=None,
+) -> None:
     while True:
         reachable, reason = probe_database(settings)
         set_database_snapshot(reachable, reason)
+        if on_result is not None:
+            try:
+                on_result(reachable, reason)
+            except Exception:
+                logging.exception("database watch listener failed")
         if stop.wait(interval_seconds):
             return
 
