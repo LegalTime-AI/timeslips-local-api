@@ -58,9 +58,16 @@ def test_firebird_blob_columns_keep_the_full_time_entry() -> None:
     assert read_blob(_Boom()) is None
 
 
-def test_description_keeps_a_length_prefix_instead_of_plain_utf8() -> None:
+def test_description_replaces_text_inside_the_native_stream() -> None:
+    old = "Call client"
+    body = old.encode("utf-16le")
+    header = bytes([0x07, 0x00, 0x01])
+    trailer = bytes([0x00, 0x01])
+    template = header + len(old).to_bytes(2, "little") + body + trailer
     text = "Reviewed the trust file."
-    encoded = encode_slip_description(b"", text)
-    assert encoded != text.encode("utf-8")
-    assert int.from_bytes(encoded[:4], "little") == len(text)
-    assert encoded[4:] == text.encode("utf-16le")
+    encoded = encode_slip_description(template, text)
+    assert encoded.startswith(header)
+    assert encoded.endswith(trailer)
+    assert text.encode("utf-16le") in encoded
+    assert encoded != len(text).to_bytes(4, "little") + text.encode("utf-16le")
+    assert int.from_bytes(encoded[len(header) : len(header) + 2], "little") == len(text)

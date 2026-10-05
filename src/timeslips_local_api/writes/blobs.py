@@ -77,27 +77,71 @@ def _framed_text(blob: bytes) -> tuple[str, int, bytes] | None:
     return None
 
 
-def encode_slip_description(template: bytes, text: str) -> bytes:
-    """Write slip text in the same shape Timeslips already stored.
+def _printable_runs(blob: bytes) -> list[tuple[int, int, str, str]]:
+    """Locate human text inside a native Timeslips stream."""
+    runs: list[tuple[int, int, str, str]] = []
+    origins = [2] if blob.startswith(b"\xff\xfe") else [0, 1]
+    for origin in origins:
+        index = origin
+        while index + 1 < len(blob):
+            chars: list[str] = []
+            start = index
+            while index + 1 < len(blob):
+                code = int.from_bytes(blob[index : index + 2], "little")
+                if code in (9, 10, 13) or 32 <= code < 127:
+                    chars.append(chr(code))
+                    index += 2
+                    continue
+                break
+            if len(chars) >= 4:
+                runs.append((start, index, "".join(chars), "utf-16le"))
+            index = start + 2
+    index = 0
+    while index < len(blob):
+        chars = []
+        start = index
+        while index < len(blob) and (blob[index] in (9, 10, 13) or 32 <= blob[index] < 127):
+            chars.append(chr(blob[index]))
+            index += 1
+        if len(chars) >= 4:
+            runs.append((start, index, "".join(chars), "cp1252"))
+        index = start + 1
+    return runs
 
-    Plain UTF-8 makes Slip Entry treat the first bytes as a length and then
-    report that the stream is shorter than that length. Only our slips fail.
+
+def _patch_length(blob: bytearray, start: int, old_len: int, new_len: int, old_chars: int, new_chars: int) -> None:
+    for width in (4, 2, 1):
+        if start < width:
+            continue
+        count = int.from_bytes(blob[start - width : start], "little")
+        if count == old_len:
+            blob[start - width : start] = new_len.to_bytes(width, "little")
+            return
+        if count == old_chars:
+            blob[start - width : start] = new_chars.to_bytes(width, "little")
+            return
+
+
+def encode_slip_description(template: bytes, text: str) -> bytes:
+    """Keep a native Timeslips description stream and replace only its text.
+
+    Inventing a length-prefixed UTF-16 blob makes Slip Entry report
+    "unknown object found". Copying the template stream leaves a slip
+    Timeslips can open.
     """
     text = text or ""
-    framed = _framed_text(template)
-    if framed is not None:
-        kind, width, header = framed
-        if kind == "bom-utf16":
-            return b"\xff\xfe" + text.encode("utf-16le")
-        if kind.endswith("-utf16"):
-            encoded = text.encode("utf-16le")
-            return header + len(text).to_bytes(width, "little") + encoded
-        encoded = text.encode("cp1252", errors="replace")
-        return header + len(encoded).to_bytes(width, "little") + encoded
-    if _looks_utf16(template):
-        return text.encode("utf-16le")
-    encoded = text.encode("utf-16le")
-    return len(text).to_bytes(4, "little") + encoded
+    if not template:
+        return text.encode("cp1252", errors="replace")
+    runs = _printable_runs(template)
+    if not runs:
+        return template
+    start, end, old, encoding = max(runs, key=lambda run: len(run[2]))
+    if not old.strip():
+        return template
+    new_bytes = text.encode(encoding)
+    updated = bytearray(template)
+    _patch_length(updated, start, end - start, len(new_bytes), len(old), len(text))
+    return bytes(updated[:start] + new_bytes + updated[end:])
 
 
 def rewrite_slip_blobs(
