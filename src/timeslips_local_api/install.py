@@ -170,7 +170,11 @@ def database_needs_setup(settings: Settings) -> bool:
 
 
 def configure_first_run(settings: Settings) -> Settings | None:
-    """Find MAIN.FDB when no database has been saved. None means the user cancelled."""
+    """Find MAIN.FDB when no database has been saved. None means the user cancelled.
+
+    An auto-update only replaces the exe. A command-line install already has
+    TIMESLIPS_FDB, so this returns the saved settings and does not ask again.
+    """
     if not database_needs_setup(settings):
         return settings
     interactive = frozen_exe_path() is not None or os.environ.get("TIMESLIPS_SETUP") == "1"

@@ -142,6 +142,44 @@ def test_explore_sample_and_sample_fdb_are_skipped(tmp_path: Path) -> None:
     ) is None
 
 
+def test_update_keeps_a_command_line_database_token_and_sharing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The exe next to the old env file must not ask for setup or mint a new token."""
+    from timeslips_local_api import config as cfg
+    from timeslips_local_api.config import load_settings
+
+    sidecar = tmp_path / "install" / "timeslips-helper.env"
+    appdata = tmp_path / "appdata" / "timeslips-helper.env"
+    sidecar.parent.mkdir()
+    appdata.parent.mkdir()
+    firm = tmp_path / "cotedata" / "MAIN.FDB"
+    firm.parent.mkdir()
+    firm.write_bytes(b"x")
+    sidecar.write_text(
+        f"TIMESLIPS_FDB={firm}\nTIMESLIPS_LAN=1\nTIMESLIPS_TOKEN=\n",
+        encoding="utf-8",
+    )
+    appdata.write_text("TIMESLIPS_TOKEN=kept-token\n", encoding="utf-8")
+    monkeypatch.setattr(cfg, "sidecar_env_file", lambda: sidecar)
+    monkeypatch.setattr(cfg, "appdata_env_file", lambda: appdata)
+    monkeypatch.delenv("TIMESLIPS_FDB", raising=False)
+    monkeypatch.delenv("TIMESLIPS_LAN", raising=False)
+    monkeypatch.delenv("TIMESLIPS_TOKEN", raising=False)
+    monkeypatch.setattr(
+        "timeslips_local_api.install.confirm_live_database",
+        lambda _path: (_ for _ in ()).throw(AssertionError("update asked for setup")),
+    )
+    settings = load_settings()
+    assert settings.fdb == str(firm)
+    assert settings.lan is True
+    assert settings.token == "kept-token"
+    assert configure_first_run(settings) is settings
+    assert sidecar.read_text(encoding="utf-8").count("TIMESLIPS_FDB=") == 1
+    assert "kept-token" in appdata.read_text(encoding="utf-8")
+
+
 def test_command_line_install_skips_the_first_run_wizard(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
