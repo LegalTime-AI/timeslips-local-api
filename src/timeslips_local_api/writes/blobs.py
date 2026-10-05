@@ -9,13 +9,15 @@ from __future__ import annotations
 
 from typing import Any
 
-SQL_BLOB = 261
+# firebirdsql reports blobs as SQL_TYPE_BLOB (520). 261 is the older BLR code.
+SQL_BLOB = 520
+BLOB_TYPE_CODES = frozenset({520, 261})
 
 
 def field_type_code(description_item: tuple) -> int | None:
     if len(description_item) < 2 or not isinstance(description_item[1], int):
         return None
-    return description_item[1]
+    return description_item[1] & ~1
 
 
 def read_blob(value: Any) -> bytes | None:
@@ -49,7 +51,7 @@ def rewrite_slip_blobs(
 ) -> None:
     """Replace every blob with bytes this process owns. Never keep a blob id."""
     for name, code in columns:
-        if code != SQL_BLOB:
+        if code is None or (code not in BLOB_TYPE_CODES and (code & ~1) not in BLOB_TYPE_CODES):
             continue
         if name == "DESCRIPTION" and description is not None:
             row[name] = description.encode("utf-8")
