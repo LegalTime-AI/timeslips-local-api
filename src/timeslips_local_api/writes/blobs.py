@@ -44,17 +44,76 @@ def read_blob(value: Any) -> bytes | None:
     return None
 
 
+def _is_blob(code: int | None) -> bool:
+    if code is None:
+        return False
+    return code in BLOB_TYPE_CODES or (code & ~1) in BLOB_TYPE_CODES
+
+
+def _looks_utf16(blob: bytes) -> bool:
+    if len(blob) < 4 or len(blob) % 2:
+        return False
+    return blob[1::2].count(0) >= len(blob) // 4
+
+
+def _framed_text(blob: bytes) -> tuple[str, int, bytes] | None:
+    """Return (kind, width, header) when the blob is a length plus text."""
+    if not blob:
+        return None
+    if blob.startswith(b"\xff\xfe") and _looks_utf16(blob[2:]):
+        return ("bom-utf16", 0, b"\xff\xfe")
+    limit = min(16, max(0, len(blob) - 2))
+    for start in range(limit):
+        for width, kind in ((4, "u32"), (2, "u16")):
+            if start + width > len(blob):
+                continue
+            count = int.from_bytes(blob[start : start + width], "little")
+            rest = blob[start + width :]
+            header = blob[:start]
+            if count > 0 and count == len(rest):
+                return (f"{kind}-bytes", width, header)
+            if count > 0 and count * 2 == len(rest):
+                return (f"{kind}-utf16", width, header)
+    return None
+
+
+def encode_slip_description(template: bytes, text: str) -> bytes:
+    """Write slip text in the same shape Timeslips already stored.
+
+    Plain UTF-8 makes Slip Entry treat the first bytes as a length and then
+    report that the stream is shorter than that length. Only our slips fail.
+    """
+    text = text or ""
+    framed = _framed_text(template)
+    if framed is not None:
+        kind, width, header = framed
+        if kind == "bom-utf16":
+            return b"\xff\xfe" + text.encode("utf-16le")
+        if kind.endswith("-utf16"):
+            encoded = text.encode("utf-16le")
+            return header + len(text).to_bytes(width, "little") + encoded
+        encoded = text.encode("cp1252", errors="replace")
+        return header + len(encoded).to_bytes(width, "little") + encoded
+    if _looks_utf16(template):
+        return text.encode("utf-16le")
+    encoded = text.encode("utf-16le")
+    return len(text).to_bytes(4, "little") + encoded
+
+
 def rewrite_slip_blobs(
     row: dict,
     columns: list[tuple[str, int | None]],
     description: str | None,
+    template_description: Any = None,
 ) -> None:
     """Replace every blob with bytes this process owns. Never keep a blob id."""
     for name, code in columns:
-        if code is None or (code not in BLOB_TYPE_CODES and (code & ~1) not in BLOB_TYPE_CODES):
+        if not _is_blob(code):
             continue
         if name == "DESCRIPTION" and description is not None:
-            row[name] = description.encode("utf-8")
+            source = template_description if template_description is not None else row.get(name)
+            template = read_blob(source) or b""
+            row[name] = encode_slip_description(template, description)
             continue
         copied = read_blob(row.get(name))
         row[name] = copied if copied is not None else b""

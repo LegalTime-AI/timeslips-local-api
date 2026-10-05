@@ -131,9 +131,9 @@ class SqlSlipWriter:
         row["TIMERONTOD"] = 0
         row["BILLEDSLIPVALUE"] = 0
         row["UNDOSLIPVALUE"] = 0
+        template_description = row.get("DESCRIPTION")
         row["DESCRIPTION"] = payload.description
-        row["CUSTOMTEXT"] = as_text(template.get("CUSTOMTEXT"))
-        rewrite_slip_blobs(row, columns, payload.description)
+        rewrite_slip_blobs(row, columns, payload.description, template_description)
         cols = list(template.keys())
         cur.execute(
             f"INSERT INTO SLPTRANS ({', '.join(cols)}) VALUES ({', '.join('?' for _ in cols)})",
@@ -178,9 +178,10 @@ class SqlSlipWriter:
             day = delphi_to_date(row["STARTDATE"]) or date.today()
         rate = float(row.get("RATEVALUE") or 0)
         _apply_time(row, duration, rate, billable, day)
+        template_description = row.get("DESCRIPTION")
         if patch.description is not None:
             row["DESCRIPTION"] = patch.description
-        rewrite_slip_blobs(row, columns, patch.description)
+        rewrite_slip_blobs(row, columns, patch.description, template_description)
         row["EDITCOUNT"] = int(row.get("EDITCOUNT") or 0) + 1
         assignments = ", ".join(f"{c} = ?" for c in cols if c != "RECORDID")
         values = [row[c] for c in cols if c != "RECORDID"]

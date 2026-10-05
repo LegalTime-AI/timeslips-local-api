@@ -1,4 +1,9 @@
-from timeslips_local_api.writes.blobs import SQL_BLOB, read_blob, rewrite_slip_blobs
+from timeslips_local_api.writes.blobs import (
+    SQL_BLOB,
+    encode_slip_description,
+    read_blob,
+    rewrite_slip_blobs,
+)
 
 
 class _Boom:
@@ -38,9 +43,11 @@ def test_firebird_blob_columns_keep_the_full_time_entry() -> None:
         ("NOTES", SQL_BLOB | 1),
         ("RATEVALUE", 480),
     ]
-    rewrite_slip_blobs(row, columns, description)
-    assert row["DESCRIPTION"] == description.encode("utf-8")
-    assert row["DESCRIPTION"].decode("utf-8") == description
+    template = "Old note".encode("utf-16le")
+    template = len("Old note").to_bytes(4, "little") + template
+    row["DESCRIPTION"] = template
+    rewrite_slip_blobs(row, columns, description, template)
+    assert row["DESCRIPTION"] == len(description).to_bytes(4, "little") + description.encode("utf-16le")
     assert row["CUSTOMTEXT"] == b""
     assert row["NOTES"] == b"native-notes-complete"
     assert row["USERID"] == 12
@@ -49,3 +56,11 @@ def test_firebird_blob_columns_keep_the_full_time_entry() -> None:
     assert row["TIMESPENT"] == 600
     assert row["RATEVALUE"] == 595
     assert read_blob(_Boom()) is None
+
+
+def test_description_keeps_a_length_prefix_instead_of_plain_utf8() -> None:
+    text = "Reviewed the trust file."
+    encoded = encode_slip_description(b"", text)
+    assert encoded != text.encode("utf-8")
+    assert int.from_bytes(encoded[:4], "little") == len(text)
+    assert encoded[4:] == text.encode("utf-16le")
