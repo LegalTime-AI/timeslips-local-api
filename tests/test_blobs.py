@@ -1,22 +1,19 @@
 from timeslips_local_api.writes.blobs import (
     SQL_BLOB,
+    decode_slip_description,
     encode_slip_description,
     read_blob,
     rewrite_slip_blobs,
 )
 
-
-class _Boom:
-    def read(self) -> bytes:
-        raise OSError("short read")
-
-
-class _Stream:
-    def __init__(self, payload: bytes) -> None:
-        self.payload = payload
-
-    def read(self) -> bytes:
-        return self.payload
+DAVID = "Review email from David requesting PDFs of new Wills; send with reply."
+DAVID_BLOB = bytes.fromhex(
+    "470f010047004700"
+    + DAVID.encode("cp1252").hex()
+    + "00"
+    + "1e000100000000"
+)
+EMPTY_BLOB = bytes.fromhex("470f010001000100001e000100000000")
 
 
 def test_firebird_blob_columns_keep_the_full_time_entry() -> None:
@@ -43,13 +40,10 @@ def test_firebird_blob_columns_keep_the_full_time_entry() -> None:
         ("NOTES", SQL_BLOB | 1),
         ("RATEVALUE", 480),
     ]
-    template = "Old note".encode("utf-16le")
-    template = len("Old note").to_bytes(4, "little") + template
-    row["DESCRIPTION"] = template
-    rewrite_slip_blobs(row, columns, description, template)
-    assert len(row["DESCRIPTION"]) == len(template)
-    assert row["DESCRIPTION"].startswith(len("Old note").to_bytes(4, "little"))
-    assert b"R\x00e\x00v\x00i\x00e\x00w\x00e\x00d\x00" in row["DESCRIPTION"]
+    rewrite_slip_blobs(row, columns, description, DAVID_BLOB)
+    assert decode_slip_description(row["DESCRIPTION"]) == description
+    assert row["DESCRIPTION"].startswith(bytes.fromhex("470f0100"))
+    assert row["DESCRIPTION"].endswith(bytes.fromhex("1e000100000000"))
     assert row["CUSTOMTEXT"] == b""
     assert row["NOTES"] == b"native-notes-complete"
     assert row["USERID"] == 12
@@ -60,17 +54,35 @@ def test_firebird_blob_columns_keep_the_full_time_entry() -> None:
     assert read_blob(_Boom()) is None
 
 
-def test_description_replaces_text_inside_the_native_stream() -> None:
-    old = "Call client"
-    body = old.encode("utf-16le")
-    header = bytes([0x07, 0x00, 0x01])
-    trailer = bytes([0x00, 0x01])
-    template = header + len(old).to_bytes(2, "little") + body + trailer
-    text = "Reviewed the trust file."
-    encoded = encode_slip_description(template, text)
-    assert encoded.startswith(header)
-    assert encoded.endswith(trailer)
-    assert encoded.startswith(header)
-    assert encoded.endswith(trailer)
-    assert len(encoded) == len(template)
-    assert int.from_bytes(encoded[len(header) : len(header) + 2], "little") == len(old)
+def test_description_frame_keeps_full_text_at_its_own_length() -> None:
+    text = "Reviewed the trust file and prepared a longer slip narrative for Timeslips."
+    encoded = encode_slip_description(DAVID_BLOB, text)
+    payload = text.encode("cp1252") + b"\x00"
+    assert encoded.startswith(bytes.fromhex("470f0100"))
+    assert encoded.endswith(bytes.fromhex("1e000100000000"))
+    assert encoded[4:6] == len(payload).to_bytes(2, "little")
+    assert encoded[6:8] == encoded[4:6]
+    assert encoded[8 : 8 + len(payload)] == payload
+    assert len(encoded) != len(DAVID_BLOB)
+    assert decode_slip_description(encoded) == text
+
+
+def test_native_and_plain_descriptions_decode() -> None:
+    assert decode_slip_description(DAVID_BLOB) == DAVID
+    assert decode_slip_description(EMPTY_BLOB) == ""
+    plain = b"timeslips-local-api GUI check 2026-09-20 unbilled time slip"
+    assert decode_slip_description(plain) == plain.decode("cp1252")
+    assert encode_slip_description(b"", "") == EMPTY_BLOB
+
+
+class _Boom:
+    def read(self) -> bytes:
+        raise OSError("short read")
+
+
+class _Stream:
+    def __init__(self, payload: bytes) -> None:
+        self.payload = payload
+
+    def read(self) -> bytes:
+        return self.payload

@@ -17,6 +17,8 @@ os.environ.setdefault(
 from fastapi.testclient import TestClient
 
 from timeslips_local_api.app import app, get_settings
+from timeslips_local_api.firebird import connect
+from timeslips_local_api.writes.blobs import decode_slip_description
 
 get_settings.cache_clear()
 client = TestClient(app)
@@ -70,7 +72,10 @@ def test_slip_lifecycle() -> None:
         "date": date.today().isoformat(),
         "durationSeconds": 600,
         "billable": True,
-        "description": f"timeslips-local-api test {external}",
+        "description": (
+            "Reviewed the trust file, prepared the certificate of trust, "
+            f"and saved the full LegalTime narrative {external} without truncation."
+        ),
     }
     created = client.post("/v1/slips", headers=AUTH, json=payload)
     assert created.status_code == 200, created.text
@@ -78,6 +83,15 @@ def test_slip_lifecycle() -> None:
     slip_id = slip["id"]
     assert slip["durationSeconds"] == 600
     assert slip["timekeeperNickname"] == "JDP"
+    assert slip["clientNickname"] == "Labellarte Trusts"
+    assert slip["activityNickname"] == "CLE"
+    assert slip["description"] == payload["description"]
+    assert slip["date"] == payload["date"]
+    listed = client.get("/v1/slips", headers=AUTH, params={"date": payload["date"]})
+    assert listed.status_code == 200
+    match = next(row for row in listed.json()["slips"] if row["id"] == slip_id)
+    assert match["description"] == payload["description"]
+    assert match["durationSeconds"] == 600
     again = client.post("/v1/slips", headers=AUTH, json=payload)
     assert again.status_code == 200
     assert again.json()["id"] == slip_id
@@ -94,12 +108,68 @@ def test_slip_lifecycle() -> None:
     )
     assert patched.status_code == 200
     assert patched.json()["durationSeconds"] == 900
+    assert patched.json()["description"] == payload["description"] + " patched"
+    pulled = client.get(f"/v1/slips/{slip_id}", headers=AUTH)
+    assert pulled.status_code == 200
+    assert pulled.json()["description"] == payload["description"] + " patched"
+    assert pulled.json()["durationSeconds"] == 900
     deleted = client.delete(f"/v1/slips/{slip_id}", headers=AUTH)
     assert deleted.status_code == 200
     missing = client.get(f"/v1/slips/{slip_id}", headers=AUTH)
     assert missing.status_code == 404
     after = client.post("/v1/slips/verify", headers=AUTH, json={"ids": [slip_id]})
     assert slip_id in after.json()["missing"]
+
+
+def test_pull_native_and_legacy_descriptions() -> None:
+    native = client.get("/v1/slips/104078", headers=AUTH)
+    assert native.status_code == 200
+    assert native.json()["description"] == (
+        "Review email from David requesting PDFs of new Wills; send with reply."
+    )
+    legacy = client.get("/v1/slips/104084", headers=AUTH)
+    assert legacy.status_code == 200
+    assert legacy.json()["description"] == (
+        "timeslips-local-api GUI check 2026-09-20 unbilled time slip"
+    )
+
+
+def test_push_writes_native_description_frame() -> None:
+    external = f"frame-{uuid.uuid4()}"
+    description = (
+        "Telephone conference with the trustee about the Oceanfront Property Group "
+        "operating agreement, then draft the follow-up letter. " + external
+    )
+    payload = {
+        "externalId": external,
+        "timekeeperNickname": "JDP",
+        "clientNickname": "Labellarte Trusts",
+        "activityNickname": "CLE",
+        "date": date.today().isoformat(),
+        "durationSeconds": 720,
+        "billable": True,
+        "description": description,
+    }
+    created = client.post("/v1/slips", headers=AUTH, json=payload)
+    assert created.status_code == 200, created.text
+    slip_id = int(created.json()["id"])
+    assert created.json()["description"] == description
+    try:
+        con = connect(get_settings())
+        cur = con.cursor()
+        cur.execute("SELECT DESCRIPTION FROM SLPTRANS WHERE RECORDID = ?", [slip_id])
+        blob = cur.fetchone()[0]
+        raw = blob if isinstance(blob, bytes) else blob.read()
+        con.close()
+        assert raw.startswith(bytes.fromhex("470f0100"))
+        assert raw.endswith(bytes.fromhex("1e000100000000"))
+        assert raw[4:6] == raw[6:8]
+        assert decode_slip_description(raw) == description
+        pulled = client.get(f"/v1/slips/{slip_id}", headers=AUTH)
+        assert pulled.json()["description"] == description
+        assert pulled.json()["durationSeconds"] == 720
+    finally:
+        client.delete(f"/v1/slips/{slip_id}", headers=AUTH)
 
 
 def test_idempotency_key_header() -> None:

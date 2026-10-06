@@ -14,6 +14,7 @@ from .models import (
     Status,
     VerifyResult,
 )
+from .writes.blobs import decode_slip_description
 from .writes.dll import DllSlipWriter
 from .writes.sql import SqlSlipWriter
 from .writes.tsimport import TsimportSlipWriter
@@ -80,7 +81,7 @@ def _row_to_slip(row: tuple, external_id: str | None) -> Slip:
         amount=amount,
         billable=int(billstatus or 0) == 1,
         billed=bool(int(billed or 0)),
-        description=as_text(description),
+        description=decode_slip_description(description),
         externalId=external_id,
     )
 
