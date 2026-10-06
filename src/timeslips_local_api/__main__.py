@@ -21,10 +21,9 @@ from .runtime import (
     acquire_single_instance,
     configure_file_logging,
     enable_autostart_once,
-    release_single_instance,
 )
 from .tray import run_tray, show_error
-from .update import apply_update, update_watch, updates_enabled
+from .update import apply_update, stop_for_update, update_watch, updates_enabled
 
 
 def _server(settings, bind: str) -> uvicorn.Server:
@@ -163,9 +162,7 @@ def main() -> None:
             holder[0].should_exit = True
 
     def exit_for_update() -> None:
-        shutdown()
-        release_single_instance()
-        os._exit(0)
+        stop_for_update(shutdown)
 
     if updates_enabled():
         threading.Thread(

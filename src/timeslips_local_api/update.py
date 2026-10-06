@@ -123,6 +123,17 @@ def _download(url: str, dest: Path) -> None:
     os.replace(tmp, dest)
 
 
+def stop_for_update(shutdown) -> None:
+    """Stop HTTP, then end this process so the replacer can swap the exe.
+
+    Process exit releases the single-instance mutex. Releasing that mutex
+    from the update thread can stall before the process exits, which closes
+    port 3051 while the replacer is still waiting.
+    """
+    shutdown()
+    os._exit(0)
+
+
 def apply_command(downloaded: str, dest: str, parent_pid: int) -> list[str]:
     return ["--apply-update", downloaded, dest, str(parent_pid)]
 

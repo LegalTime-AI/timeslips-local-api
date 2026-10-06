@@ -15,6 +15,7 @@ from timeslips_local_api.update import (
     checksum_matches,
     parse_sha256_sums,
     release_is_newer,
+    stop_for_update,
     update_due,
     updates_enabled,
     version_tuple,
@@ -124,6 +125,22 @@ def test_database_problem_checks_before_the_regular_interval() -> None:
         next_problem=100 + PROBLEM_CHECK_SECONDS,
         database_down=True,
     )
+
+
+def test_stop_for_update_ends_the_process_after_the_server_stops(monkeypatch: pytest.MonkeyPatch) -> None:
+    order: list[object] = []
+
+    def shutdown() -> None:
+        order.append("down")
+
+    def _exit(code: int) -> None:
+        order.append(code)
+        raise SystemExit(code)
+
+    monkeypatch.setattr("timeslips_local_api.update.os._exit", _exit)
+    with pytest.raises(SystemExit):
+        stop_for_update(shutdown)
+    assert order == ["down", 0]
 
 
 def test_apply_command_names_the_running_process() -> None:
