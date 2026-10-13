@@ -8,12 +8,22 @@ from timeslips_local_api.firebird import as_text  # noqa: F401
 from timeslips_local_api.ledger import Ledger
 from timeslips_local_api.models import SlipCreate, SlipPatch
 from timeslips_local_api.writes.blobs import field_type_code, rewrite_slip_blobs
+from timeslips_local_api.writes.rates import (
+    RATE_TYPE_HOURLY,
+    MissingRateError,
+    RateChoice,
+    resolve_rate,
+)
 
 COUNTER_RECORD = 100060
 COUNTER_TRANS = 5
 NAME_TIMEKEEPER = 0
 NAME_CLIENT = 1
 NAME_ACTIVITY = 3
+# SLIPSOURCE 4 is a slip entered in Timeslips on this computer (5 is Timeslips GO).
+# 1 is shown as "Source: Accounting" in Slip Entry, so the helper no longer writes it.
+SLIP_SOURCE_DESKTOP = 4
+LEGACY_HELPER_SLIP_SOURCE = 1
 
 
 def _hours(duration_seconds: int) -> float:
@@ -55,19 +65,25 @@ def _column_types(cur) -> list[tuple[str, int | None]]:
     return [(d[0], field_type_code(d)) for d in cur.description]
 
 
-def _template_row(cur) -> tuple[dict, list[tuple[str, int | None]]]:
-    # Clone a slip this helper did not write. SLIPSOURCE 1 is the helper.
-    # Cloning our own newest row copies a broken description stream forward.
+def _template_row(cur, ledger: Ledger | None = None) -> tuple[dict, list[tuple[str, int | None]]]:
+    # Clone a slip this helper did not write: not legacy SLIPSOURCE 1 and not in
+    # the ledger. Cloning our own row copies an earlier helper's mistakes forward.
+    # Rates never come from the template; see resolve_rate.
     cur.execute(
         """
-        SELECT FIRST 1 *
+        SELECT FIRST 200 *
         FROM SLPTRANS
         WHERE TRANSTYPE = 1 AND BILLED = 0 AND INVOICEID = 0
           AND SLIPSOURCE IS DISTINCT FROM 1
         ORDER BY RECORDID DESC
         """
     )
-    row = cur.fetchone()
+    row = None
+    for candidate in cur.fetchall():
+        if ledger is not None and ledger.find_external(str(candidate[0])):
+            continue
+        row = candidate
+        break
     if not row:
         cur.execute(
             """
@@ -92,6 +108,34 @@ def _next_ids(cur) -> tuple[int, int]:
     return record, trans
 
 
+def _missing_rate_error(cur, user_id: int, err: MissingRateError) -> ApiError:
+    cur.execute("SELECT NICKNAME1 FROM NAME WHERE RECORDID = ?", [user_id])
+    row = cur.fetchone()
+    nickname = (str(row[0]).strip() if row and row[0] else "this timekeeper")
+    where = f" at rate level {err.level}" if err.level else ""
+    return ApiError(
+        422,
+        f"Timeslips has no hourly rate for {nickname}{where} for this client. "
+        "Add the rate in Timeslips, then release again.",
+    )
+
+
+def _choose_rate(cur, user_id: int, client_id: int, activity_id: int) -> RateChoice:
+    try:
+        return resolve_rate(cur, user_id, client_id, activity_id)
+    except MissingRateError as err:
+        # A slip without a rate shows !Rate / !Value on Slip List, including a
+        # "No Charge" slip, so refuse instead of writing one.
+        raise _missing_rate_error(cur, user_id, err) from None
+
+
+def _apply_rate(row: dict, choice: RateChoice) -> None:
+    row["RATESOURCE"] = choice.source
+    row["RATELEVEL"] = choice.level
+    row["RATEVALUE"] = round(choice.value, 4)
+    row["RATETYPE"] = choice.rate_type or RATE_TYPE_HOURLY
+
+
 def _apply_time(
     row: dict,
     duration_seconds: int,
@@ -110,8 +154,10 @@ def _apply_time(
         if key not in ("STARTDATE", "ENDDATE") and value in old_dates:
             row[key] = new_day
     row["TIMESPENT"] = max(1, int(round(duration_seconds * ticks_per_hour / 3600)))
-    row["TIMEUNBILLABLE"] = 0 if billable else duration_seconds
-    row["TRANSVALUE"] = round(rate * hours, 4) if billable else 0
+    # Native "No Charge" slips keep their time and value; BILLSTATUS 3 is
+    # what keeps them off the bill. TIMEUNBILLABLE stays 0 like Timeslips.
+    row["TIMEUNBILLABLE"] = 0
+    row["TRANSVALUE"] = round(rate * hours, 2)
     row["BILLSTATUS"] = 1 if billable else 3
     row["BILLED"] = 0
     row["INVOICEID"] = 0
@@ -133,11 +179,12 @@ class SqlSlipWriter:
         client_id = _name_id(cur, payload.clientNickname, NAME_CLIENT)
         activity_id = _name_id(cur, payload.activityNickname, NAME_ACTIVITY)
         day = date.fromisoformat(payload.date)
-        template, columns = _template_row(cur)
+        choice = _choose_rate(cur, user_id, client_id, activity_id)
+        template, columns = _template_row(cur, self.ledger)
         record_id, trans_id = _next_ids(cur)
-        rate = float(template.get("RATEVALUE") or 0)
         row = dict(template)
-        _apply_time(row, payload.durationSeconds, rate, payload.billable, day, _ticks_per_hour(cur))
+        _apply_rate(row, choice)
+        _apply_time(row, payload.durationSeconds, choice.value, payload.billable, day, _ticks_per_hour(cur))
         row["RECORDID"] = record_id
         row["TRANSID"] = trans_id
         row["EDITCOUNT"] = 1
@@ -152,7 +199,7 @@ class SqlSlipWriter:
         row["GOTRANSFERRED"] = "F"
         row["SPLITSLIPID"] = 0
         row["ORIGSLIPID"] = 0
-        row["SLIPSOURCE"] = 1
+        row["SLIPSOURCE"] = SLIP_SOURCE_DESKTOP
         row["TIMERONDATE"] = 0
         row["TIMERONTOD"] = 0
         row["BILLEDSLIPVALUE"] = 0
@@ -188,12 +235,14 @@ class SqlSlipWriter:
         row = dict(zip(cols, raw))
         if int(row.get("BILLED") or 0) or int(row.get("INVOICEID") or 0):
             raise ConflictError("cannot change a billed or invoiced slip")
+        before = (row.get("USERID"), row.get("CLIENTID"), row.get("ACTYEXPID"))
         if patch.timekeeperNickname:
             row["USERID"] = _name_id(cur, patch.timekeeperNickname, NAME_TIMEKEEPER)
         if patch.clientNickname:
             row["CLIENTID"] = _name_id(cur, patch.clientNickname, NAME_CLIENT)
         if patch.activityNickname:
             row["ACTYEXPID"] = _name_id(cur, patch.activityNickname, NAME_ACTIVITY)
+        names_changed = before != (row.get("USERID"), row.get("CLIENTID"), row.get("ACTYEXPID"))
         duration = patch.durationSeconds if patch.durationSeconds is not None else int(row["TIMESPENT"] or 0)
         billable = patch.billable if patch.billable is not None else int(row.get("BILLSTATUS") or 1) == 1
         if patch.date:
@@ -203,6 +252,18 @@ class SqlSlipWriter:
 
             day = delphi_to_date(row["STARTDATE"]) or date.today()
         rate = float(row.get("RATEVALUE") or 0)
+        legacy = int(row.get("SLIPSOURCE") or 0) == LEGACY_HELPER_SLIP_SOURCE and bool(
+            self.ledger.find_external(str(slip_id))
+        )
+        if names_changed or legacy or rate <= 0:
+            # Keep a rate the lawyer set in Timeslips; re-pick it only when the
+            # slip moved to another timekeeper, client or activity, or when an
+            # older helper wrote it (copied rate, "Source: Accounting").
+            choice = _choose_rate(cur, int(row["USERID"]), int(row["CLIENTID"]), int(row["ACTYEXPID"]))
+            _apply_rate(row, choice)
+            rate = choice.value
+            if legacy:
+                row["SLIPSOURCE"] = SLIP_SOURCE_DESKTOP
         _apply_time(row, duration, rate, billable, day, _ticks_per_hour(cur))
         template_description = row.get("DESCRIPTION")
         if patch.description is not None:

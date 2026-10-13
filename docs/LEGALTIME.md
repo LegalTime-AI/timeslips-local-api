@@ -9,7 +9,7 @@ This helper is Timeslips-shaped. LegalTime’s desktop adapter is a thin HTTP cl
 | `listMatters()` / `listClients()` | `GET /v1/clients` (client nickname is the matter) |
 | `listBillingCodes()` | `GET /v1/activities` |
 | timekeeper | `GET /v1/timekeepers` (match `email` to the LegalTime account) |
-| `pushEntry()` | `POST /v1/slips` with `externalId` = LegalTime entry id |
+| `pushEntry()` | `POST /v1/slips` with `externalId` = LegalTime entry id. `422` when Timeslips has no hourly rate for that timekeeper and client; LegalTime shows the message and keeps the entry in Review. |
 | `updateEntry()` | `PATCH /v1/slips/{id}` |
 | `deleteEntry()` / Undo Release | `DELETE /v1/slips/{id}` |
 | `verifyEntries()` | `POST /v1/slips/verify` |

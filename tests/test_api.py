@@ -20,6 +20,13 @@ from timeslips_local_api.app import app, get_settings
 from timeslips_local_api.firebird import connect
 from timeslips_local_api.writes.blobs import decode_slip_description
 
+# Names that exist in the copy database. The timekeeper needs an hourly rate at
+# the client's rate level, or the helper refuses the slip (see writes/rates.py).
+TK = os.environ.get("TIMESLIPS_TEST_TIMEKEEPER", "JDP")
+CLIENT_NICK = os.environ.get("TIMESLIPS_TEST_CLIENT", "Labellarte Trusts")
+ACT = os.environ.get("TIMESLIPS_TEST_ACTIVITY", "CLE")
+NO_RATE_TK = os.environ.get("TIMESLIPS_TEST_NO_RATE_TIMEKEEPER", "")
+
 get_settings.cache_clear()
 client = TestClient(app)
 AUTH = {"Authorization": "Bearer test-token"}
@@ -52,9 +59,9 @@ def test_status_and_catalogs() -> None:
     assert "slips" in body["capabilities"]
     assert body["productionWritesBlocked"] is False
     tks = client.get("/v1/timekeepers", headers=AUTH).json()["timekeepers"]
-    assert any(row["nickname"] == "JDP" for row in tks)
-    acts = client.get("/v1/activities?q=CLE", headers=AUTH).json()["activities"]
-    assert any(row["nickname"] == "CLE" for row in acts)
+    assert any(row["nickname"] == TK for row in tks)
+    acts = client.get(f"/v1/activities?q={ACT}", headers=AUTH).json()["activities"]
+    assert any(row["nickname"] == ACT for row in acts)
 
 
 def test_reserved_501() -> None:
@@ -66,9 +73,9 @@ def test_slip_lifecycle() -> None:
     external = f"test-{uuid.uuid4()}"
     payload = {
         "externalId": external,
-        "timekeeperNickname": "JDP",
-        "clientNickname": "Labellarte Trusts",
-        "activityNickname": "CLE",
+        "timekeeperNickname": TK,
+        "clientNickname": CLIENT_NICK,
+        "activityNickname": ACT,
         "date": date.today().isoformat(),
         "durationSeconds": 600,
         "billable": True,
@@ -82,9 +89,12 @@ def test_slip_lifecycle() -> None:
     slip = created.json()
     slip_id = slip["id"]
     assert slip["durationSeconds"] == 600
-    assert slip["timekeeperNickname"] == "JDP"
-    assert slip["clientNickname"] == "Labellarte Trusts"
-    assert slip["activityNickname"] == "CLE"
+    assert slip["timekeeperNickname"] == TK
+    assert slip["clientNickname"] == CLIENT_NICK
+    assert slip["activityNickname"] == ACT
+    # Rate comes from Timeslips' rate rules, never 0 (which shows !Rate / !Value).
+    assert slip["rate"] > 0
+    assert slip["amount"] == pytest.approx(round(slip["rate"] * slip["hours"], 2), abs=0.01)
     assert slip["description"] == payload["description"]
     assert slip["date"] == payload["date"]
     listed = client.get("/v1/slips", headers=AUTH, params={"date": payload["date"]})
@@ -121,6 +131,10 @@ def test_slip_lifecycle() -> None:
     assert slip_id in after.json()["missing"]
 
 
+@pytest.mark.skipif(
+    os.environ.get("TIMESLIPS_TEST_EXPLORE_DB") != "1",
+    reason="reads fixed slip ids from the 2026-09 exploration copy; set TIMESLIPS_TEST_EXPLORE_DB=1 there",
+)
 def test_pull_native_and_legacy_descriptions() -> None:
     native = client.get("/v1/slips/104078", headers=AUTH)
     assert native.status_code == 200
@@ -142,9 +156,9 @@ def test_push_writes_native_description_frame() -> None:
     )
     payload = {
         "externalId": external,
-        "timekeeperNickname": "JDP",
-        "clientNickname": "Labellarte Trusts",
-        "activityNickname": "CLE",
+        "timekeeperNickname": TK,
+        "clientNickname": CLIENT_NICK,
+        "activityNickname": ACT,
         "date": date.today().isoformat(),
         "durationSeconds": 720,
         "billable": True,
@@ -175,9 +189,9 @@ def test_push_writes_native_description_frame() -> None:
 def test_idempotency_key_header() -> None:
     key = f"hdr-{uuid.uuid4()}"
     payload = {
-        "timekeeperNickname": "JDP",
-        "clientNickname": "Labellarte Trusts",
-        "activityNickname": "CLE",
+        "timekeeperNickname": TK,
+        "clientNickname": CLIENT_NICK,
+        "activityNickname": ACT,
         "date": date.today().isoformat(),
         "durationSeconds": 480,
         "billable": True,
@@ -191,3 +205,52 @@ def test_idempotency_key_header() -> None:
     assert second.status_code == 200
     assert second.json()["id"] == slip_id
     client.delete(f"/v1/slips/{slip_id}", headers=AUTH)
+
+
+def test_slip_rate_matches_native_rule_and_source() -> None:
+    body = {
+        "externalId": f"rate-{uuid.uuid4()}",
+        "timekeeperNickname": TK,
+        "clientNickname": CLIENT_NICK,
+        "activityNickname": ACT,
+        "date": date.today().isoformat(),
+        "durationSeconds": 1800,
+        "billable": False,
+        "description": "timeslips-local-api rate check (no charge)",
+    }
+    res = client.post("/v1/slips", headers=AUTH, json=body)
+    assert res.status_code == 200, res.text
+    slip = res.json()
+    try:
+        assert slip["billable"] is False
+        assert slip["rate"] > 0
+        # Native "No Charge" slips keep their value; BILLSTATUS keeps them off the bill.
+        assert slip["amount"] == pytest.approx(round(slip["rate"] * 0.5, 2), abs=0.01)
+        con = connect(get_settings())
+        cur = con.cursor()
+        cur.execute(
+            "SELECT SLIPSOURCE, TIMEUNBILLABLE, BILLSTATUS FROM SLPTRANS WHERE RECORDID = ?",
+            [int(slip["id"])],
+        )
+        source, unbillable, status = cur.fetchone()
+        con.close()
+        assert (source, unbillable, status) == (4, 0, 3)
+    finally:
+        client.delete(f"/v1/slips/{slip['id']}", headers=AUTH)
+
+
+@pytest.mark.skipif(not NO_RATE_TK, reason="set TIMESLIPS_TEST_NO_RATE_TIMEKEEPER")
+def test_timekeeper_without_rate_is_refused() -> None:
+    body = {
+        "externalId": f"norate-{uuid.uuid4()}",
+        "timekeeperNickname": NO_RATE_TK,
+        "clientNickname": CLIENT_NICK,
+        "activityNickname": ACT,
+        "date": date.today().isoformat(),
+        "durationSeconds": 600,
+        "billable": True,
+        "description": "should be refused",
+    }
+    res = client.post("/v1/slips", headers=AUTH, json=body)
+    assert res.status_code == 422
+    assert "no hourly rate" in res.json()["error"]
