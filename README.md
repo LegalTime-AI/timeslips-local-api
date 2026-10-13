@@ -81,6 +81,8 @@ Example create body:
 }
 ```
 
+A new slip's rate follows Timeslips' own rate rules: the client's rate source and level, then that timekeeper's (or client's) rate table. It is never copied from another slip. If Timeslips has no hourly rate for that timekeeper at the client's level, `POST`/`PATCH` returns `422` with a message saying which rate to add, instead of writing a slip that Timeslips shows as `!Rate` / `!Value`. Slips are written as desktop slips (`SLIPSOURCE` 4); editing a slip an older helper wrote re-picks its rate.
+
 Write backend: `TIMESLIPS_WRITE_BACKEND=sql` (working) · `dll` (unused; see [docs/dll-probe.md](docs/dll-probe.md)) · `tsimport` (GUI importer, not unattended).
 
 ## LegalTime
