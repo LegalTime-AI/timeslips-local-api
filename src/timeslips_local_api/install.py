@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -78,24 +79,61 @@ def select_database(candidates: list[Path], confirm_production) -> tuple[Path | 
     return None, False
 
 
+def _version_rank(name: str) -> tuple[int, ...]:
+    digits = [int(part) for part in re.findall(r"\d+", name)]
+    return tuple(digits) or (0,)
+
+
+def timeslips_registry_subkeys(names: list[str]) -> list[str]:
+    """Where Timeslips keeps DatabasePath: newest version first, then the old flat key.
+
+    Timeslips 2016+ writes ``Software\\Sage\\Timeslips\\v30\\General``; older
+    releases wrote ``Software\\Sage\\Timeslips`` directly.
+    """
+    versions = sorted(
+        (name for name in names if re.fullmatch(r"[vV]\d+(\.\d+)*", name)),
+        key=_version_rank,
+        reverse=True,
+    )
+    out: list[str] = []
+    for version in versions:
+        out.extend([f"{version}\\General", version])
+    out.append("")
+    return out
+
+
 def read_timeslips_database_path() -> str | None:
     if sys.platform != "win32":
         return None
     import winreg
 
-    keys = (
+    roots = (
         (winreg.HKEY_CURRENT_USER, r"Software\Sage\Timeslips"),
         (winreg.HKEY_LOCAL_MACHINE, r"Software\WOW6432Node\Sage\Timeslips"),
         (winreg.HKEY_LOCAL_MACHINE, r"Software\Sage\Timeslips"),
     )
-    for hive, name in keys:
+    for hive, root in roots:
         try:
-            with winreg.OpenKey(hive, name) as key:
-                value, _ = winreg.QueryValueEx(key, "DatabasePath")
+            with winreg.OpenKey(hive, root) as key:
+                names: list[str] = []
+                index = 0
+                while True:
+                    try:
+                        names.append(winreg.EnumKey(key, index))
+                    except OSError:
+                        break
+                    index += 1
         except OSError:
             continue
-        if isinstance(value, str) and value.strip():
-            return value.strip()
+        for sub in timeslips_registry_subkeys(names):
+            name = f"{root}\\{sub}" if sub else root
+            try:
+                with winreg.OpenKey(hive, name) as key:
+                    value, _ = winreg.QueryValueEx(key, "DatabasePath")
+            except OSError:
+                continue
+            if isinstance(value, str) and value.strip():
+                return value.strip()
     return None
 
 
@@ -210,7 +248,7 @@ def firewall_add_args(exe: Path) -> list[str]:
         "action=allow",
         f"program={program}",
         "enable=yes",
-        "profile=private",
+        "profile=private,domain",
     ]
 
 
@@ -241,7 +279,7 @@ def elevated_firewall_script(exe: Path) -> str:
         f"'name=\"{FIREWALL_RULE_NAME}\"',"
         "'dir=in','action=allow',"
         f"'{program_arg}',"
-        "'enable=yes','profile=private'"
+        "'enable=yes','profile=private,domain'"
         ")"
     )
 
@@ -261,7 +299,7 @@ def _netsh_elevated(exe: Path) -> bool:
 
 
 def ensure_private_firewall(exe: Path) -> None:
-    """Allow the helper on Private networks. One UAC prompt, then remembered."""
+    """Allow the helper on Private and office (Domain) networks. One UAC prompt, then remembered."""
     if sys.platform != "win32" or frozen_exe_path() is None:
         return
     marker = appdata_dir() / "firewall-private.ok"
@@ -277,3 +315,153 @@ def ensure_private_firewall(exe: Path) -> None:
         return
     logging.warning("Timeslips helper could not add a Private-network firewall rule")
     marker.write_text("skipped\n", encoding="utf-8")
+
+
+def public_network_names() -> list[str]:
+    """Connected networks Windows treats as Public (the firewall rule does not apply there)."""
+    if sys.platform != "win32":
+        return []
+    try:
+        completed = subprocess.run(
+            [
+                "powershell",
+                "-NoProfile",
+                "-Command",
+                "Get-NetConnectionProfile | Where-Object NetworkCategory -eq 'Public' | "
+                "ForEach-Object { $_.Name }",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=20,
+            creationflags=CREATE_NO_WINDOW,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return []
+    return [line.strip() for line in (completed.stdout or "").splitlines() if line.strip()]
+
+
+def make_networks_private() -> bool:
+    """Switch Public networks to Private after one UAC prompt."""
+    inner = (
+        "Get-NetConnectionProfile | Where-Object NetworkCategory -eq 'Public' | "
+        "Set-NetConnectionProfile -NetworkCategory Private"
+    )
+    script = (
+        "Start-Process -FilePath powershell -Verb RunAs -Wait -WindowStyle Hidden "
+        f"-ArgumentList @('-NoProfile','-Command',\"{inner}\")"
+    )
+    try:
+        completed = subprocess.run(
+            ["powershell", "-NoProfile", "-WindowStyle", "Hidden", "-Command", script],
+            check=False,
+            capture_output=True,
+            creationflags=CREATE_NO_WINDOW if sys.platform == "win32" else 0,
+        )
+    except OSError:
+        return False
+    return completed.returncode == 0 and not public_network_names()
+
+
+READY_MESSAGE = (
+    "Timeslips helper is ready.\n\n"
+    "On each computer that uses LegalTime AI, open LegalTime Settings and click Connect "
+    "next to Timeslips computer. A box will appear here: click Yes once for each computer.\n\n"
+    "The helper starts by itself when this computer turns on. Keep this computer on "
+    "during the work day so time can be sent to Timeslips."
+)
+
+PUBLIC_NETWORK_MESSAGE = (
+    "Windows has this computer's network set to Public, so other computers in the office "
+    "can't reach the Timeslips helper.\n\n"
+    "Switch this network to Private? Windows will ask for permission once.\n\n"
+    "Only do this on your office network, not on public Wi-Fi."
+)
+
+
+def welcome_after_setup(lan: bool) -> None:
+    """First launch only: fix a Public network if needed, then say what to do next."""
+    if sys.platform != "win32" or not lan:
+        return
+    if public_network_names() and ask_yes_no(PUBLIC_NETWORK_MESSAGE):
+        if not make_networks_private():
+            logging.warning("network is still Public after the switch request")
+    import ctypes
+
+    ctypes.windll.user32.MessageBoxW(None, READY_MESSAGE, "Timeslips helper", 0x40 | 0x10000)
+
+
+INSTALLED_EXE_NAME = "TimeslipsHelper.exe"
+
+
+def installed_exe_path() -> Path:
+    return appdata_dir() / INSTALLED_EXE_NAME
+
+
+def needs_relocation(exe: Path | None, first_setup: bool, target: Path) -> bool:
+    """A first launch from Downloads (or anywhere else) moves into the fixed folder.
+
+    Existing installs keep their place: they already have a saved database and
+    may keep a token file next to the exe.
+    """
+    if exe is None or not first_setup:
+        return False
+    try:
+        return exe.resolve() != target.resolve()
+    except OSError:
+        return False
+
+
+def relocate_and_relaunch(exe: Path, target: Path) -> bool:
+    """Copy this exe to the fixed folder, add a Start menu shortcut, start the copy.
+
+    True means the copy is running and this process should exit.
+    """
+    import shutil
+
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(exe, target)
+    except OSError:
+        logging.exception("could not copy the helper to %s", target)
+        return False
+    try:
+        os.remove(str(target) + ":Zone.Identifier")
+    except OSError:
+        pass
+    add_start_menu_shortcut(target)
+    try:
+        subprocess.Popen(
+            [str(target)],
+            cwd=str(target.parent),
+            creationflags=(0x00000008 | 0x00000200) if sys.platform == "win32" else 0,
+            close_fds=True,
+        )
+    except OSError:
+        logging.exception("could not start the installed helper")
+        return False
+    return True
+
+
+def add_start_menu_shortcut(target: Path) -> None:
+    if sys.platform != "win32":
+        return
+    appdata = os.environ.get("APPDATA")
+    if not appdata:
+        return
+    link = Path(appdata) / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Timeslips helper.lnk"
+    script = (
+        "$s=(New-Object -ComObject WScript.Shell).CreateShortcut($env:TS_LINK);"
+        "$s.TargetPath=$env:TS_TARGET;$s.WorkingDirectory=$env:TS_DIR;$s.Save()"
+    )
+    try:
+        subprocess.run(
+            ["powershell", "-NoProfile", "-WindowStyle", "Hidden", "-Command", script],
+            env={**os.environ, "TS_LINK": str(link), "TS_TARGET": str(target), "TS_DIR": str(target.parent)},
+            check=False,
+            capture_output=True,
+            timeout=30,
+            creationflags=CREATE_NO_WINDOW,
+        )
+    except (OSError, subprocess.SubprocessError):
+        logging.warning("could not add the Start menu shortcut")
