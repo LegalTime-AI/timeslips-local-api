@@ -20,6 +20,9 @@ from .install import (
     configure_first_run,
     database_needs_setup,
     ensure_private_firewall,
+    installed_exe_path,
+    needs_relocation,
+    relocate_and_relaunch,
     welcome_after_setup,
 )
 from .runtime import (
@@ -90,6 +93,11 @@ def main() -> None:
     if frozen:
         configure_file_logging()
     settings = load_settings()
+    if frozen and sys.platform == "win32":
+        target = installed_exe_path()
+        if needs_relocation(frozen_exe_path(), database_needs_setup(settings), target):
+            if relocate_and_relaunch(frozen_exe_path(), target):
+                raise SystemExit(0)
     if not acquire_single_instance():
         try:
             bind = resolve_bind(settings)

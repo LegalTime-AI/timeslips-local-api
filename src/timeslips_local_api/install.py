@@ -351,3 +351,79 @@ def welcome_after_setup(lan: bool) -> None:
     import ctypes
 
     ctypes.windll.user32.MessageBoxW(None, READY_MESSAGE, "Timeslips helper", 0x40 | 0x10000)
+
+
+INSTALLED_EXE_NAME = "TimeslipsHelper.exe"
+
+
+def installed_exe_path() -> Path:
+    return appdata_dir() / INSTALLED_EXE_NAME
+
+
+def needs_relocation(exe: Path | None, first_setup: bool, target: Path) -> bool:
+    """A first launch from Downloads (or anywhere else) moves into the fixed folder.
+
+    Existing installs keep their place: they already have a saved database and
+    may keep a token file next to the exe.
+    """
+    if exe is None or not first_setup:
+        return False
+    try:
+        return exe.resolve() != target.resolve()
+    except OSError:
+        return False
+
+
+def relocate_and_relaunch(exe: Path, target: Path) -> bool:
+    """Copy this exe to the fixed folder, add a Start menu shortcut, start the copy.
+
+    True means the copy is running and this process should exit.
+    """
+    import shutil
+
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(exe, target)
+    except OSError:
+        logging.exception("could not copy the helper to %s", target)
+        return False
+    try:
+        os.remove(str(target) + ":Zone.Identifier")
+    except OSError:
+        pass
+    add_start_menu_shortcut(target)
+    try:
+        subprocess.Popen(
+            [str(target)],
+            cwd=str(target.parent),
+            creationflags=(0x00000008 | 0x00000200) if sys.platform == "win32" else 0,
+            close_fds=True,
+        )
+    except OSError:
+        logging.exception("could not start the installed helper")
+        return False
+    return True
+
+
+def add_start_menu_shortcut(target: Path) -> None:
+    if sys.platform != "win32":
+        return
+    appdata = os.environ.get("APPDATA")
+    if not appdata:
+        return
+    link = Path(appdata) / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Timeslips helper.lnk"
+    script = (
+        "$s=(New-Object -ComObject WScript.Shell).CreateShortcut($env:TS_LINK);"
+        "$s.TargetPath=$env:TS_TARGET;$s.WorkingDirectory=$env:TS_DIR;$s.Save()"
+    )
+    try:
+        subprocess.run(
+            ["powershell", "-NoProfile", "-WindowStyle", "Hidden", "-Command", script],
+            env={**os.environ, "TS_LINK": str(link), "TS_TARGET": str(target), "TS_DIR": str(target.parent)},
+            check=False,
+            capture_output=True,
+            timeout=30,
+            creationflags=CREATE_NO_WINDOW,
+        )
+    except (OSError, subprocess.SubprocessError):
+        logging.warning("could not add the Start menu shortcut")

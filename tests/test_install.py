@@ -217,3 +217,14 @@ def test_firewall_rule_is_private_and_quotes_spaces() -> None:
     assert 'program="C:\\Program Files\\TimeslipsHelper.exe"' in script
     assert "profile=private,domain" in script
     assert "profile=public" not in script
+
+
+def test_first_launch_from_downloads_moves_to_fixed_folder(tmp_path: Path) -> None:
+    from timeslips_local_api.install import needs_relocation
+
+    downloads = tmp_path / "Downloads" / "TimeslipsHelper.exe"
+    fixed = tmp_path / "AppData" / "TimeslipsHelper" / "TimeslipsHelper.exe"
+    assert needs_relocation(downloads, True, fixed)
+    assert not needs_relocation(fixed, True, fixed)
+    assert not needs_relocation(downloads, False, fixed)
+    assert not needs_relocation(None, True, fixed)
