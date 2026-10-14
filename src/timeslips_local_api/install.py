@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -78,24 +79,61 @@ def select_database(candidates: list[Path], confirm_production) -> tuple[Path | 
     return None, False
 
 
+def _version_rank(name: str) -> tuple[int, ...]:
+    digits = [int(part) for part in re.findall(r"\d+", name)]
+    return tuple(digits) or (0,)
+
+
+def timeslips_registry_subkeys(names: list[str]) -> list[str]:
+    """Where Timeslips keeps DatabasePath: newest version first, then the old flat key.
+
+    Timeslips 2016+ writes ``Software\\Sage\\Timeslips\\v30\\General``; older
+    releases wrote ``Software\\Sage\\Timeslips`` directly.
+    """
+    versions = sorted(
+        (name for name in names if re.fullmatch(r"[vV]\d+(\.\d+)*", name)),
+        key=_version_rank,
+        reverse=True,
+    )
+    out: list[str] = []
+    for version in versions:
+        out.extend([f"{version}\\General", version])
+    out.append("")
+    return out
+
+
 def read_timeslips_database_path() -> str | None:
     if sys.platform != "win32":
         return None
     import winreg
 
-    keys = (
+    roots = (
         (winreg.HKEY_CURRENT_USER, r"Software\Sage\Timeslips"),
         (winreg.HKEY_LOCAL_MACHINE, r"Software\WOW6432Node\Sage\Timeslips"),
         (winreg.HKEY_LOCAL_MACHINE, r"Software\Sage\Timeslips"),
     )
-    for hive, name in keys:
+    for hive, root in roots:
         try:
-            with winreg.OpenKey(hive, name) as key:
-                value, _ = winreg.QueryValueEx(key, "DatabasePath")
+            with winreg.OpenKey(hive, root) as key:
+                names: list[str] = []
+                index = 0
+                while True:
+                    try:
+                        names.append(winreg.EnumKey(key, index))
+                    except OSError:
+                        break
+                    index += 1
         except OSError:
             continue
-        if isinstance(value, str) and value.strip():
-            return value.strip()
+        for sub in timeslips_registry_subkeys(names):
+            name = f"{root}\\{sub}" if sub else root
+            try:
+                with winreg.OpenKey(hive, name) as key:
+                    value, _ = winreg.QueryValueEx(key, "DatabasePath")
+            except OSError:
+                continue
+            if isinstance(value, str) and value.strip():
+                return value.strip()
     return None
 
 

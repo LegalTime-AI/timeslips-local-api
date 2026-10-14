@@ -228,3 +228,16 @@ def test_first_launch_from_downloads_moves_to_fixed_folder(tmp_path: Path) -> No
     assert not needs_relocation(fixed, True, fixed)
     assert not needs_relocation(downloads, False, fixed)
     assert not needs_relocation(None, True, fixed)
+
+
+def test_timeslips_v30_registry_location_is_read_first() -> None:
+    from timeslips_local_api.install import timeslips_registry_subkeys
+
+    assert timeslips_registry_subkeys(["v29", "v30", "Licensing"]) == [
+        "v30\\General",
+        "v30",
+        "v29\\General",
+        "v29",
+        "",
+    ]
+    assert timeslips_registry_subkeys([]) == [""]
