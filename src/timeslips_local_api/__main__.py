@@ -16,7 +16,12 @@ from .app import app, get_settings
 from .config import frozen_exe_path, load_settings, persist_running_token, resolve_bind
 from .discovery import advertise
 from .health import database_watch
-from .install import configure_first_run, ensure_private_firewall
+from .install import (
+    configure_first_run,
+    database_needs_setup,
+    ensure_private_firewall,
+    welcome_after_setup,
+)
 from .runtime import (
     acquire_single_instance,
     configure_file_logging,
@@ -94,6 +99,7 @@ def main() -> None:
             raise SystemExit(0)
         show_error("Timeslips helper is already running.")
         raise SystemExit(0)
+    first_setup = frozen and database_needs_setup(settings)
     prepared = configure_first_run(settings)
     if prepared is None:
         show_error("Choose the Timeslips database (MAIN.FDB) to continue.")
@@ -188,6 +194,9 @@ def main() -> None:
             "Timeslips helper could not start. Check %LOCALAPPDATA%\\TimeslipsHelper\\helper.log."
         )
         raise SystemExit(1)
+
+    if first_setup:
+        threading.Thread(target=welcome_after_setup, args=(settings.lan,), daemon=True).start()
 
     try:
         run_tray(settings, on_stop=shutdown, request_exit=request_exit)

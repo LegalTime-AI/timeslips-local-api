@@ -11,7 +11,9 @@ from .errors import ApiError
 from .firebird_store import FirebirdStore, RESERVED
 from .health import health_payload
 from .ledger import Ledger
-from .models import SlipCreate, SlipPatch, VerifyRequest
+from .models import PairRequest, SlipCreate, SlipPatch, VerifyRequest
+from .pairing import request_pairing
+from .discovery import machine_host_name
 
 app = FastAPI(title="timeslips-local-api", version=HELPER_VERSION)
 
@@ -46,6 +48,20 @@ def require_token(
 @app.get("/health")
 def health() -> dict:
     return health_payload(get_settings())
+
+
+@app.post("/pair")
+def pair(payload: PairRequest, request: Request) -> dict:
+    """Unauthenticated on purpose: the Yes/No box on this computer is the check."""
+    settings = get_settings()
+    token = request_pairing(
+        token=settings.token,
+        lan=settings.lan,
+        client_host=request.client.host if request.client else None,
+        computer=payload.computer,
+        user=payload.user,
+    )
+    return {"token": token, "hostName": machine_host_name()}
 
 
 @app.get("/v1/status")

@@ -73,3 +73,8 @@ class Status(BaseModel):
     productionWritesBlocked: bool
     timeslipsVersion: str | None = None
     databaseReason: str | None = None
+
+
+class PairRequest(BaseModel):
+    computer: str = Field(default="", max_length=200)
+    user: str = Field(default="", max_length=200)

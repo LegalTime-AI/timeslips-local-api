@@ -210,7 +210,7 @@ def firewall_add_args(exe: Path) -> list[str]:
         "action=allow",
         f"program={program}",
         "enable=yes",
-        "profile=private",
+        "profile=private,domain",
     ]
 
 
@@ -241,7 +241,7 @@ def elevated_firewall_script(exe: Path) -> str:
         f"'name=\"{FIREWALL_RULE_NAME}\"',"
         "'dir=in','action=allow',"
         f"'{program_arg}',"
-        "'enable=yes','profile=private'"
+        "'enable=yes','profile=private,domain'"
         ")"
     )
 
@@ -261,7 +261,7 @@ def _netsh_elevated(exe: Path) -> bool:
 
 
 def ensure_private_firewall(exe: Path) -> None:
-    """Allow the helper on Private networks. One UAC prompt, then remembered."""
+    """Allow the helper on Private and office (Domain) networks. One UAC prompt, then remembered."""
     if sys.platform != "win32" or frozen_exe_path() is None:
         return
     marker = appdata_dir() / "firewall-private.ok"
@@ -277,3 +277,77 @@ def ensure_private_firewall(exe: Path) -> None:
         return
     logging.warning("Timeslips helper could not add a Private-network firewall rule")
     marker.write_text("skipped\n", encoding="utf-8")
+
+
+def public_network_names() -> list[str]:
+    """Connected networks Windows treats as Public (the firewall rule does not apply there)."""
+    if sys.platform != "win32":
+        return []
+    try:
+        completed = subprocess.run(
+            [
+                "powershell",
+                "-NoProfile",
+                "-Command",
+                "Get-NetConnectionProfile | Where-Object NetworkCategory -eq 'Public' | "
+                "ForEach-Object { $_.Name }",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=20,
+            creationflags=CREATE_NO_WINDOW,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return []
+    return [line.strip() for line in (completed.stdout or "").splitlines() if line.strip()]
+
+
+def make_networks_private() -> bool:
+    """Switch Public networks to Private after one UAC prompt."""
+    inner = (
+        "Get-NetConnectionProfile | Where-Object NetworkCategory -eq 'Public' | "
+        "Set-NetConnectionProfile -NetworkCategory Private"
+    )
+    script = (
+        "Start-Process -FilePath powershell -Verb RunAs -Wait -WindowStyle Hidden "
+        f"-ArgumentList @('-NoProfile','-Command',\"{inner}\")"
+    )
+    try:
+        completed = subprocess.run(
+            ["powershell", "-NoProfile", "-WindowStyle", "Hidden", "-Command", script],
+            check=False,
+            capture_output=True,
+            creationflags=CREATE_NO_WINDOW if sys.platform == "win32" else 0,
+        )
+    except OSError:
+        return False
+    return completed.returncode == 0 and not public_network_names()
+
+
+READY_MESSAGE = (
+    "Timeslips helper is ready.\n\n"
+    "On each computer that uses LegalTime AI, open LegalTime Settings and click Connect "
+    "next to Timeslips computer. A box will appear here: click Yes once for each computer.\n\n"
+    "The helper starts by itself when this computer turns on. Keep this computer on "
+    "during the work day so time can be sent to Timeslips."
+)
+
+PUBLIC_NETWORK_MESSAGE = (
+    "Windows has this computer's network set to Public, so other computers in the office "
+    "can't reach the Timeslips helper.\n\n"
+    "Switch this network to Private? Windows will ask for permission once.\n\n"
+    "Only do this on your office network, not on public Wi-Fi."
+)
+
+
+def welcome_after_setup(lan: bool) -> None:
+    """First launch only: fix a Public network if needed, then say what to do next."""
+    if sys.platform != "win32" or not lan:
+        return
+    if public_network_names() and ask_yes_no(PUBLIC_NETWORK_MESSAGE):
+        if not make_networks_private():
+            logging.warning("network is still Public after the switch request")
+    import ctypes
+
+    ctypes.windll.user32.MessageBoxW(None, READY_MESSAGE, "Timeslips helper", 0x40 | 0x10000)

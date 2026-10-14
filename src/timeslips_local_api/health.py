@@ -120,6 +120,7 @@ def health_payload(settings: Settings) -> dict:
         "apiVersion": API_VERSION,
         "helperVersion": HELPER_VERSION,
         "hostName": machine_host_name(),
+        "pairing": bool(settings.lan),
         "database": {
             "reachable": reachable,
             "reason": reason,

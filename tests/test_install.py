@@ -208,12 +208,12 @@ def test_command_line_install_skips_the_first_run_wizard(
 
 def test_firewall_rule_is_private_and_quotes_spaces() -> None:
     args = firewall_add_args(Path(r"C:\Program Files\TimeslipsHelper.exe"))
-    assert "profile=private" in args
+    assert "profile=private,domain" in args
     assert 'name="Timeslips helper"' in args
     assert r'program="C:\Program Files\TimeslipsHelper.exe"' in args
     assert "profile=any" not in args
     assert "profile=public" not in args
     script = elevated_firewall_script(Path(r"C:\Program Files\TimeslipsHelper.exe"))
     assert 'program="C:\\Program Files\\TimeslipsHelper.exe"' in script
-    assert "profile=private" in script
+    assert "profile=private,domain" in script
     assert "profile=public" not in script
