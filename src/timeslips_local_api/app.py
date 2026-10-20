@@ -72,7 +72,7 @@ def status(_: None = Depends(require_token), store: FirebirdStore = Depends(get_
 @app.get("/v1/timekeepers")
 def timekeepers(
     q: str | None = None,
-    limit: int = 500,
+    limit: int = 10000,
     _: None = Depends(require_token),
     store: FirebirdStore = Depends(get_store),
 ) -> dict:
@@ -82,7 +82,7 @@ def timekeepers(
 @app.get("/v1/clients")
 def clients(
     q: str | None = None,
-    limit: int = 500,
+    limit: int = 10000,
     _: None = Depends(require_token),
     store: FirebirdStore = Depends(get_store),
 ) -> dict:
@@ -92,7 +92,7 @@ def clients(
 @app.get("/v1/activities")
 def activities(
     q: str | None = None,
-    limit: int = 500,
+    limit: int = 10000,
     _: None = Depends(require_token),
     store: FirebirdStore = Depends(get_store),
 ) -> dict:
