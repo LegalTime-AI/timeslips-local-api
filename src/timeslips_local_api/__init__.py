@@ -2,5 +2,5 @@
 
 # apiVersion is the HTTP contract. Bump only for a breaking v1 change.
 API_VERSION = 1
-HELPER_VERSION = "0.5.0"
+HELPER_VERSION = "0.5.1"
 __version__ = HELPER_VERSION

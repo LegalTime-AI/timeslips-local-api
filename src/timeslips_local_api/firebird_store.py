@@ -86,6 +86,11 @@ def _row_to_slip(row: tuple, external_id: str | None) -> Slip:
     )
 
 
+# Whole client/timekeeper/activity lists go to LegalTime in one call, so the cap
+# must sit above any real firm's book (a 500 cap hid the last clients A-Z).
+NAME_LIST_MAX = 10000
+
+
 class FirebirdStore:
     def __init__(self, settings: Settings, ledger: Ledger) -> None:
         self.settings = settings
@@ -132,7 +137,7 @@ class FirebirdStore:
             sql += " AND (n.NICKNAME1 CONTAINING ? OR n.NICKNAME2 CONTAINING ? OR n.FULLNAME CONTAINING ?)"
             params.extend([q, q, q])
         sql += " AND n.CLASSIFICATION <> 3"
-        cap = max(1, min(limit, 500))
+        cap = max(1, min(limit, NAME_LIST_MAX))
         sql = sql.replace("SELECT n.RECORDID", f"SELECT FIRST {cap} n.RECORDID", 1)
         sql += " ORDER BY n.NICKNAME1"
         cur.execute(sql, params)
