@@ -13,7 +13,7 @@ import urllib.request
 from pathlib import Path
 
 from . import HELPER_VERSION
-from .config import appdata_dir, frozen_exe_path
+from .config import appdata_dir, frozen_exe_path, helper_child_env
 
 RELEASES_URL = "https://api.github.com/repos/LegalTime-AI/timeslips-local-api/releases/latest"
 ASSET_NAME = "TimeslipsHelper.exe"
@@ -174,7 +174,7 @@ def _start_helper(target: Path) -> None:
     flags = 0
     if sys.platform == "win32":
         flags = _DETACHED | _NEW_GROUP
-    subprocess.Popen([str(target)], close_fds=True, creationflags=flags)
+    subprocess.Popen([str(target)], close_fds=True, creationflags=flags, env=helper_child_env())
 
 
 def apply_update(
@@ -221,6 +221,7 @@ def _spawn_apply(downloaded: Path, dest: Path) -> None:
         [sys.executable, *apply_command(str(downloaded), str(dest), os.getpid())],
         close_fds=True,
         creationflags=flags,
+        env=helper_child_env(),
     )
 
 
