@@ -13,7 +13,7 @@ import urllib.request
 from pathlib import Path
 
 from . import HELPER_VERSION
-from .config import appdata_dir, frozen_exe_path
+from .config import appdata_dir, frozen_exe_path, helper_child_env
 
 RELEASES_URL = "https://api.github.com/repos/LegalTime-AI/timeslips-local-api/releases/latest"
 ASSET_NAME = "TimeslipsHelper.exe"
@@ -174,7 +174,37 @@ def _start_helper(target: Path) -> None:
     flags = 0
     if sys.platform == "win32":
         flags = _DETACHED | _NEW_GROUP
-    subprocess.Popen([str(target)], close_fds=True, creationflags=flags)
+    subprocess.Popen([str(target)], close_fds=True, creationflags=flags, env=helper_child_env())
+
+
+OLD_SUFFIX = ".old"
+
+
+def _move_aside(target: Path) -> bool:
+    """Rename the (possibly running) exe to ``<name>.old`` so a new file can take its name."""
+    if not target.exists():
+        return True
+    aside = target.with_name(target.name + OLD_SUFFIX)
+    try:
+        aside.unlink(missing_ok=True)
+    except OSError:
+        aside = target.with_name(f"{target.name}{OLD_SUFFIX}-{int(time.time())}")
+    try:
+        os.replace(target, aside)
+        return True
+    except OSError:
+        return False
+
+
+def remove_old_copies(exe: Path | None) -> None:
+    """Delete exes a previous update moved aside. Ignored while one is still running."""
+    if exe is None:
+        return
+    for old in exe.parent.glob(exe.name + OLD_SUFFIX + "*"):
+        try:
+            old.unlink()
+        except OSError:
+            pass
 
 
 def apply_update(
@@ -203,6 +233,15 @@ def apply_update(
             replaced = True
             break
         except OSError:
+            # This replacer runs from the exe it replaces, and Windows never lets a
+            # running exe be overwritten. It can be renamed, so move it aside first.
+            if _move_aside(target):
+                try:
+                    os.replace(source, target)
+                    replaced = True
+                    break
+                except OSError:
+                    logging.warning("helper update could not move the new exe into place", exc_info=True)
             if time.time() > deadline:
                 logging.exception("helper update could not replace %s", target)
                 break
@@ -221,6 +260,7 @@ def _spawn_apply(downloaded: Path, dest: Path) -> None:
         [sys.executable, *apply_command(str(downloaded), str(dest), os.getpid())],
         close_fds=True,
         creationflags=flags,
+        env=helper_child_env(),
     )
 
 

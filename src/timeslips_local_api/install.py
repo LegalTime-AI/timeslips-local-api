@@ -14,6 +14,7 @@ from .config import (
     appdata_dir,
     fdb_is_explicit,
     frozen_exe_path,
+    helper_child_env,
     lan_is_explicit,
     load_settings,
     looks_like_production_fdb,
@@ -590,6 +591,7 @@ def relocate_and_relaunch(exe: Path, target: Path) -> bool:
             cwd=str(target.parent),
             creationflags=(0x00000008 | 0x00000200) if sys.platform == "win32" else 0,
             close_fds=True,
+            env=helper_child_env(),
         )
     except OSError:
         logging.exception("could not start the installed helper")

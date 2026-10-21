@@ -7,7 +7,7 @@ import sys
 import threading
 from pathlib import Path
 
-from .config import Settings, appdata_dir, persist_lan
+from .config import Settings, appdata_dir, helper_child_env, persist_lan
 from .discovery import helper_http_url
 from .health import probe_database
 from .runtime import autostart_enabled, release_single_instance, set_autostart
@@ -62,8 +62,7 @@ def run_tray(settings: Settings, on_stop=None, request_exit: threading.Event | N
         if on_stop:
             on_stop()
         release_single_instance()
-        env = os.environ.copy()
-        env["TIMESLIPS_LAN"] = "1" if enabled else "0"
+        env = helper_child_env({"TIMESLIPS_LAN": "1" if enabled else "0"})
         cmd = [sys.executable] if getattr(sys, "frozen", False) else [sys.executable, "-m", "timeslips_local_api"]
         kwargs: dict = {"env": env, "cwd": os.getcwd(), "start_new_session": True}
         if sys.platform == "win32":

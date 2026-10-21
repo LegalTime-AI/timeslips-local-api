@@ -54,6 +54,26 @@ def frozen_exe_path() -> Path | None:
     return None
 
 
+def helper_child_env(extra: dict[str, str] | None = None) -> dict[str, str]:
+    """Environment for a new copy of the helper (update, restart, first-run move).
+
+    A packed (PyInstaller one-file) helper unpacks itself to a temporary folder and
+    exports that location to its environment. A child started with the same
+    environment reuses the parent's folder, and the parent deletes it when it
+    exits, so the child dies on its first import ("No module named '_sqlite3'").
+    PYINSTALLER_RESET_ENVIRONMENT=1 makes the child unpack its own copy.
+    """
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if not key.upper().startswith(("_PYI_", "_MEIPASS"))
+    }
+    env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
+    if extra:
+        env.update(extra)
+    return env
+
+
 def appdata_dir() -> Path:
     base = Path(os.environ.get("LOCALAPPDATA") or Path.home()) / APPDATA_DIR_NAME
     base.mkdir(parents=True, exist_ok=True)
