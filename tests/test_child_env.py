@@ -76,3 +76,31 @@ def test_first_run_move_starts_the_copy_with_a_clean_env(
     assert install.relocate_and_relaunch(exe, target) is True
     assert calls[0]["env"]["PYINSTALLER_RESET_ENVIRONMENT"] == "1"
     assert "_PYI_APPLICATION_HOME_DIR" not in calls[0]["env"]
+
+
+def test_replacer_moves_a_locked_exe_aside(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Windows refuses to overwrite the running exe but allows renaming it."""
+    calls = _capture_popen(monkeypatch)
+    new = tmp_path / "update" / "TimeslipsHelper.exe"
+    new.parent.mkdir()
+    new.write_bytes(b"new")
+    target = tmp_path / "TimeslipsHelper.exe"
+    target.write_bytes(b"old")
+    real_replace = update.os.replace
+    state = {"locked": True}
+
+    def replace(src, dst):
+        if state["locked"] and Path(dst) == target and Path(src) == new:
+            raise PermissionError("in use")
+        if Path(src) == target:
+            state["locked"] = False
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(update.os, "replace", replace)
+    update.apply_update(str(new), str(target), None, replace_timeout=2)
+    assert target.read_bytes() == b"new"
+    assert (tmp_path / "TimeslipsHelper.exe.old").read_bytes() == b"old"
+    assert calls[-1]["args"] == [str(target)]
+    update.remove_old_copies(target)
+    assert not (tmp_path / "TimeslipsHelper.exe.old").exists()
+    assert target.read_bytes() == b"new"

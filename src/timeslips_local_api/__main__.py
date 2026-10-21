@@ -31,7 +31,7 @@ from .runtime import (
     enable_autostart_once,
 )
 from .tray import run_tray, show_error
-from .update import apply_update, stop_for_update, update_watch, updates_enabled
+from .update import apply_update, remove_old_copies, stop_for_update, update_watch, updates_enabled
 
 
 def _server(settings, bind: str) -> uvicorn.Server:
@@ -107,6 +107,8 @@ def main() -> None:
             raise SystemExit(0)
         show_error("Timeslips helper is already running.")
         raise SystemExit(0)
+    if frozen:
+        remove_old_copies(frozen_exe_path())
     first_setup = frozen and database_needs_setup(settings)
     prepared = configure_first_run(settings)
     if prepared is None:
