@@ -360,8 +360,8 @@ def firewall_rule_covers(rows: list[tuple[bool, str, str]], exe: Path) -> bool:
 
 
 FIREWALL_QUERY = (
-    "Get-NetFirewallRule -DisplayName $env:TS_RULE -Direction Inbound -ErrorAction SilentlyContinue | "
-    "ForEach-Object { $app = $_ | Get-NetFirewallApplicationFilter; "
+    "Get-NetFirewallRule -DisplayName $env:TS_RULE -ErrorAction SilentlyContinue | "
+    "Where-Object { $_.Direction -eq 'Inbound' } | ForEach-Object { $app = $_ | Get-NetFirewallApplicationFilter; "
     "'{0}|{1}|{2}|{3}' -f $_.Enabled, $_.Action, $_.Profile, $app.Program }"
 )
 
