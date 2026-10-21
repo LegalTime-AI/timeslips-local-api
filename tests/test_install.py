@@ -35,7 +35,7 @@ def test_copy_is_preferred_over_the_live_firm_file(tmp_path: Path) -> None:
     firm = tmp_path / "Databases" / "Firm" / "MAIN.FDB"
     firm.parent.mkdir(parents=True)
     firm.write_bytes(b"x")
-    chosen, allow = select_database([firm, copy], confirm_production=lambda _path: True)
+    chosen, allow = select_database([firm, copy], confirm=lambda _path: True)
     assert chosen == copy
     assert allow is False
 
@@ -44,10 +44,10 @@ def test_live_firm_file_needs_a_yes(tmp_path: Path) -> None:
     firm = tmp_path / "Databases" / "Firm" / "MAIN.FDB"
     firm.parent.mkdir(parents=True)
     firm.write_bytes(b"x")
-    chosen, allow = select_database([firm], confirm_production=lambda _path: True)
+    chosen, allow = select_database([firm], confirm=lambda _path: True)
     assert chosen == firm
     assert allow is True
-    declined, _allow = select_database([firm], confirm_production=lambda _path: False)
+    declined, _allow = select_database([firm], confirm=lambda _path: False)
     assert declined is None
 
 
@@ -57,7 +57,7 @@ def test_cancelled_picker_does_not_save_a_database(tmp_path: Path) -> None:
     firm.write_bytes(b"x")
     assert configure_installed_database(
         candidates=[firm],
-        confirm_production=lambda _path: False,
+        confirm=lambda _path: False,
         pick_file=lambda: None,
         enable_lan=True,
     ) is None
@@ -69,7 +69,7 @@ def test_picked_live_file_allows_production_writes(tmp_path: Path) -> None:
     firm.write_bytes(b"x")
     assert configure_installed_database(
         candidates=[],
-        confirm_production=lambda _path: False,
+        confirm=lambda _path: False,
         pick_file=lambda: firm,
         enable_lan=True,
     ) == (str(firm), True, True)
@@ -131,12 +131,12 @@ def test_explore_sample_and_sample_fdb_are_skipped(tmp_path: Path) -> None:
     assert is_sample_database(named) is True
     assert is_sample_database(firm) is False
     assert database_candidates(str(sample.parent), [named, firm]) == [firm.resolve()]
-    chosen, allow = select_database([sample, named], confirm_production=lambda _path: True)
+    chosen, allow = select_database([sample, named], confirm=lambda _path: True)
     assert chosen is None
     assert allow is False
     assert configure_installed_database(
         candidates=[],
-        confirm_production=lambda _path: True,
+        confirm=lambda _path: True,
         pick_file=lambda: sample,
         enable_lan=True,
     ) is None
@@ -168,7 +168,7 @@ def test_update_keeps_a_command_line_database_token_and_sharing(
     monkeypatch.delenv("TIMESLIPS_LAN", raising=False)
     monkeypatch.delenv("TIMESLIPS_TOKEN", raising=False)
     monkeypatch.setattr(
-        "timeslips_local_api.install.confirm_live_database",
+        "timeslips_local_api.install.confirm_database",
         lambda _path: (_ for _ in ()).throw(AssertionError("update asked for setup")),
     )
     settings = load_settings()
@@ -198,7 +198,7 @@ def test_command_line_install_skips_the_first_run_wizard(
     monkeypatch.setattr(cfg, "sidecar_env_file", lambda: env)
     monkeypatch.delenv("TIMESLIPS_FDB", raising=False)
     monkeypatch.setattr(
-        "timeslips_local_api.install.confirm_live_database",
+        "timeslips_local_api.install.confirm_database",
         lambda _path: (_ for _ in ()).throw(AssertionError("wizard ran")),
     )
     settings = Settings(fdb=str(firm), token="kept", lan=True)
@@ -241,3 +241,89 @@ def test_timeslips_v30_registry_location_is_read_first() -> None:
         "",
     ]
     assert timeslips_registry_subkeys([]) == [""]
+
+
+def test_non_standard_live_file_is_confirmed_before_use(tmp_path: Path) -> None:
+    """Cote bills from Documents\\cotedata\\MAIN.FDB: not the standard folder, still asked."""
+    live = tmp_path / "Documents" / "cotedata" / "MAIN.FDB"
+    live.parent.mkdir(parents=True)
+    live.write_bytes(b"x" * 2048)
+    asked: list[Path] = []
+
+    def say(answer: bool):
+        def confirm(path: Path) -> bool:
+            asked.append(path)
+            return answer
+        return confirm
+
+    chosen, allow = select_database([live], confirm=say(True))
+    assert chosen == live and allow is False and asked == [live]
+    declined, _ = select_database([live], confirm=say(False))
+    assert declined is None
+
+
+def test_declined_pick_opens_the_file_picker(tmp_path: Path) -> None:
+    wrong = tmp_path / "Old" / "MAIN.FDB"
+    right = tmp_path / "cotedata" / "MAIN.FDB"
+    for path in (wrong, right):
+        path.parent.mkdir(parents=True)
+        path.write_bytes(b"x")
+    assert configure_installed_database(
+        candidates=[wrong],
+        confirm=lambda _path: False,
+        pick_file=lambda: right,
+        enable_lan=True,
+    ) == (str(right), False, True)
+
+
+def test_confirm_message_shows_path_size_and_date(tmp_path: Path) -> None:
+    from timeslips_local_api.install import database_confirm_message
+
+    live = tmp_path / "cotedata" / "MAIN.FDB"
+    live.parent.mkdir()
+    live.write_bytes(b"x" * (3 * 1024 * 1024))
+    text = database_confirm_message(live)
+    assert str(live) in text
+    assert "Size: 3 MB" in text
+    assert "Last changed:" in text
+    assert "bills from" in text
+
+
+def test_firewall_rule_for_another_exe_does_not_count() -> None:
+    from timeslips_local_api.install import firewall_rule_covers, firewall_rule_rows
+
+    exe = Path(r"C:\Users\Rosaleen\AppData\Local\TimeslipsHelper\TimeslipsHelper.exe")
+    old = "True|Allow|Private|C:\\LegalTime\\TimeslipsHelper\\TimeslipsHelper.exe\n"
+    assert firewall_rule_covers(firewall_rule_rows(old), exe) is False
+    mine = f"True|Allow|Domain, Private|{str(exe).lower()}\n"
+    assert firewall_rule_covers(firewall_rule_rows(old + mine), exe) is True
+    disabled = f"False|Allow|Private|{exe}\n"
+    assert firewall_rule_covers(firewall_rule_rows(disabled), exe) is False
+    public_only = f"True|Allow|Public|{exe}\n"
+    assert firewall_rule_covers(firewall_rule_rows(public_only), exe) is False
+    block = f"True|Block|Private|{exe}\n"
+    assert firewall_rule_rows(block) == []
+
+
+def test_old_marker_without_a_path_is_rechecked() -> None:
+    from timeslips_local_api.install import _firewall_marker_matches, _firewall_marker_text
+
+    exe = Path(r"C:\Users\R\AppData\Local\TimeslipsHelper\TimeslipsHelper.exe")
+    assert _firewall_marker_matches("ok\n", exe) is False
+    assert _firewall_marker_matches(_firewall_marker_text("ok", exe), exe) is True
+    other = Path(r"C:\LegalTime\TimeslipsHelper\TimeslipsHelper.exe")
+    assert _firewall_marker_matches(_firewall_marker_text("ok", other), exe) is False
+
+
+def test_replace_script_removes_then_adds_with_spaces_quoted() -> None:
+    import base64
+
+    from timeslips_local_api.install import elevated_replace_firewall_script
+
+    script = elevated_replace_firewall_script(Path(r"C:\Users\Rosaleen Wynn\App's\TimeslipsHelper.exe"))
+    encoded = script.split("'-EncodedCommand','", 1)[1].split("'", 1)[0]
+    inner = base64.b64decode(encoded).decode("utf-16-le")
+    assert inner.index("Remove-NetFirewallRule") < inner.index("New-NetFirewallRule")
+    assert "-Program 'C:\\Users\\Rosaleen Wynn\\App''s\\TimeslipsHelper.exe'" in inner
+    assert "-Profile Private,Domain" in inner
+    assert "-Verb RunAs" in script

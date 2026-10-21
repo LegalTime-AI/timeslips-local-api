@@ -65,18 +65,21 @@ def database_candidates(registry_path: str | None, extra: list[Path]) -> list[Pa
     return ordered
 
 
-def select_database(candidates: list[Path], confirm_production) -> tuple[Path | None, bool]:
-    """Pick a copy when one exists. A lone live firm file needs a yes."""
+def select_database(candidates: list[Path], confirm) -> tuple[Path | None, bool]:
+    """Pick a copy when one exists, else the live firm file. Every pick needs a yes.
+
+    The live-firm check only recognises the standard ``Databases\\Firm`` folder, so a
+    firm that bills from a file somewhere else (Documents, another drive) would
+    otherwise be treated as a copy and used without asking.
+    """
     candidates = [path for path in candidates if not is_sample_database(path)]
-    copies = [path for path in candidates if not looks_like_production_fdb(str(path))]
-    if copies:
-        return copies[0], False
     if not candidates:
         return None, False
-    firm = candidates[0]
-    if confirm_production(firm):
-        return firm, True
-    return None, False
+    copies = [path for path in candidates if not looks_like_production_fdb(str(path))]
+    chosen = copies[0] if copies else candidates[0]
+    if not confirm(chosen):
+        return None, False
+    return chosen, looks_like_production_fdb(str(chosen))
 
 
 def _version_rank(name: str) -> tuple[int, ...]:
@@ -145,12 +148,33 @@ def ask_yes_no(message: str) -> bool:
     return ctypes.windll.user32.MessageBoxW(None, message, "Timeslips helper", 0x24) == 6
 
 
-def confirm_live_database(path: Path) -> bool:
-    return ask_yes_no(
-        "Timeslips helper found the live firm database.\n\n"
-        f"{path}\n\n"
-        "LegalTime will create time slips in this file. Continue?"
+def describe_database(path: Path) -> str:
+    """Size and last change, so a stale copy is easy to tell from the file in use."""
+    try:
+        stat = path.stat()
+    except OSError:
+        return ""
+    import datetime
+
+    size_mb = stat.st_size / (1024 * 1024)
+    changed = datetime.datetime.fromtimestamp(stat.st_mtime)
+    when = changed.strftime("%b %d, %Y %I:%M %p").replace(" 0", " ")
+    return f"Size: {size_mb:,.0f} MB\nLast changed: {when}"
+
+
+def database_confirm_message(path: Path) -> str:
+    details = describe_database(path)
+    return (
+        "Timeslips helper will send time slips to this database:\n\n"
+        f"{path}\n"
+        + (f"\n{details}\n" if details else "")
+        + "\nIs this the database your firm bills from?\n\n"
+        "Yes: use it. No: choose a different file."
     )
+
+
+def confirm_database(path: Path) -> bool:
+    return ask_yes_no(database_confirm_message(path))
 
 
 def pick_database_file() -> Path | None:
@@ -183,12 +207,12 @@ def pick_database_file() -> Path | None:
 def configure_installed_database(
     *,
     candidates: list[Path],
-    confirm_production,
+    confirm,
     pick_file,
     enable_lan: bool,
 ) -> tuple[str, bool, bool] | None:
     """Return (path, allow_production, enable_lan), or None if the user cancelled."""
-    path, allow = select_database(candidates, confirm_production)
+    path, allow = select_database(candidates, confirm)
     if path is None:
         path = pick_file()
         if path is None or is_sample_database(path):
@@ -220,7 +244,7 @@ def configure_first_run(settings: Settings) -> Settings | None:
         return settings
     chosen = configure_installed_database(
         candidates=database_candidates(read_timeslips_database_path(), default_search_paths()),
-        confirm_production=confirm_live_database,
+        confirm=confirm_database,
         pick_file=pick_database_file,
         enable_lan=not lan_is_explicit(),
     )
@@ -298,23 +322,153 @@ def _netsh_elevated(exe: Path) -> bool:
     return completed.returncode == 0
 
 
+def _same_program(a: str, b: Path) -> bool:
+    """Windows path compare (case-insensitive) on every platform so tests match Windows."""
+    import ntpath
+
+    try:
+        return ntpath.normcase(ntpath.normpath(a.strip().strip('"'))) == ntpath.normcase(
+            ntpath.normpath(str(b))
+        )
+    except (TypeError, ValueError):
+        return False
+
+
+def firewall_rule_rows(output: str) -> list[tuple[bool, str, str]]:
+    """Parse ``enabled|action|profile|program`` lines from the rule query."""
+    rows: list[tuple[bool, str, str]] = []
+    for line in output.splitlines():
+        parts = line.strip().split("|", 3)
+        if len(parts) != 4:
+            continue
+        enabled, action, profile, program = parts
+        if action.strip().lower() != "allow":
+            continue
+        rows.append((enabled.strip().lower() == "true", profile.strip(), program.strip()))
+    return rows
+
+
+def firewall_rule_covers(rows: list[tuple[bool, str, str]], exe: Path) -> bool:
+    """True when an enabled inbound allow rule for this exact exe covers Private networks."""
+    for enabled, profile, program in rows:
+        if not enabled or not _same_program(program, exe):
+            continue
+        profiles = {p.strip().lower() for p in profile.split(",")}
+        if profiles & {"private", "any"}:
+            return True
+    return False
+
+
+FIREWALL_QUERY = (
+    "Get-NetFirewallRule -DisplayName $env:TS_RULE -ErrorAction SilentlyContinue | "
+    "Where-Object { $_.Direction -eq 'Inbound' } | ForEach-Object { $app = $_ | Get-NetFirewallApplicationFilter; "
+    "'{0}|{1}|{2}|{3}' -f $_.Enabled, $_.Action, $_.Profile, $app.Program }"
+)
+
+
+def read_firewall_rules() -> list[tuple[bool, str, str]] | None:
+    """Rules named "Timeslips helper", or None when Windows could not be asked."""
+    if sys.platform != "win32":
+        return None
+    try:
+        completed = subprocess.run(
+            ["powershell", "-NoProfile", "-Command", FIREWALL_QUERY],
+            env={**os.environ, "TS_RULE": FIREWALL_RULE_NAME},
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            creationflags=CREATE_NO_WINDOW,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if completed.returncode != 0:
+        return None
+    return firewall_rule_rows(completed.stdout or "")
+
+
+def _firewall_marker_text(status: str, exe: Path) -> str:
+    return f"{status}\n{exe}\n"
+
+
+def _firewall_marker_matches(text: str, exe: Path) -> bool:
+    """A marker counts only for the exe it was written for (older markers have no path)."""
+    lines = text.splitlines()
+    return len(lines) >= 2 and _same_program(lines[1], exe)
+
+
+def elevated_replace_firewall_script(exe: Path) -> str:
+    """One UAC prompt: drop rules with our name that point elsewhere, add one for this exe."""
+    import base64
+
+    program = str(exe).replace("'", "''")
+    name = FIREWALL_RULE_NAME.replace("'", "''")
+    inner = (
+        f"Remove-NetFirewallRule -DisplayName '{name}' -ErrorAction SilentlyContinue; "
+        f"New-NetFirewallRule -DisplayName '{name}' -Direction Inbound -Action Allow "
+        f"-Program '{program}' -Profile Private,Domain -Enabled True | Out-Null"
+    )
+    encoded = base64.b64encode(inner.encode("utf-16-le")).decode("ascii")
+    return (
+        "Start-Process -FilePath powershell -Verb RunAs -Wait -WindowStyle Hidden "
+        f"-ArgumentList @('-NoProfile','-EncodedCommand','{encoded}')"
+    )
+
+
+def _replace_firewall_rule(exe: Path) -> bool:
+    if _netsh(["advfirewall", "firewall", "delete", "rule", f"name={FIREWALL_RULE_NAME}"]) and _netsh(
+        firewall_add_args(exe)
+    ):
+        return True
+    try:
+        completed = subprocess.run(
+            [
+                "powershell",
+                "-NoProfile",
+                "-WindowStyle",
+                "Hidden",
+                "-Command",
+                elevated_replace_firewall_script(exe),
+            ],
+            check=False,
+            capture_output=True,
+            creationflags=CREATE_NO_WINDOW if sys.platform == "win32" else 0,
+        )
+    except OSError:
+        return False
+    return completed.returncode == 0
+
+
 def ensure_private_firewall(exe: Path) -> None:
-    """Allow the helper on Private and office (Domain) networks. One UAC prompt, then remembered."""
+    """Allow this exe on Private and office (Domain) networks. One UAC prompt, then remembered.
+
+    A rule with our name is only trusted when it points at this exe. A leftover rule
+    from a manual install (or an exe that moved) would otherwise look like success
+    while Windows blocks the helper.
+    """
     if sys.platform != "win32" or frozen_exe_path() is None:
         return
     marker = appdata_dir() / "firewall-private.ok"
-    if marker.is_file():
+    try:
+        saved = marker.read_text(encoding="utf-8") if marker.is_file() else ""
+    except OSError:
+        saved = ""
+    if saved and _firewall_marker_matches(saved, exe):
         return
-    if _netsh(["advfirewall", "firewall", "show", "rule", f"name={FIREWALL_RULE_NAME}"]) or _netsh(
-        firewall_add_args(exe)
-    ):
-        marker.write_text("ok\n", encoding="utf-8")
+    rows = read_firewall_rules()
+    if rows is not None and firewall_rule_covers(rows, exe):
+        marker.write_text(_firewall_marker_text("ok", exe), encoding="utf-8")
         return
-    if _netsh_elevated(exe):
-        marker.write_text("ok\n", encoding="utf-8")
+    if rows is not None and rows:
+        logging.info("firewall rule %r points at another program; replacing it", FIREWALL_RULE_NAME)
+        ok = _replace_firewall_rule(exe)
+    else:
+        ok = _netsh(firewall_add_args(exe)) or _netsh_elevated(exe)
+    if ok:
+        marker.write_text(_firewall_marker_text("ok", exe), encoding="utf-8")
         return
     logging.warning("Timeslips helper could not add a Private-network firewall rule")
-    marker.write_text("skipped\n", encoding="utf-8")
+    marker.write_text(_firewall_marker_text("skipped", exe), encoding="utf-8")
 
 
 def public_network_names() -> list[str]:
